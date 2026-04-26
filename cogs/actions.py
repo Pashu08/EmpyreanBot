@@ -20,8 +20,12 @@ class Actions(commands.Cog):
         c = conn.cursor()
         user = c.execute("SELECT background, vitality FROM users WHERE user_id=?", (ctx.author.id,)).fetchone()
         
-        if not user: return await ctx.send("Use !start first.")
-        if user[1] < 10: return await ctx.send("❌ You are too exhausted to work. Rest your body.")
+        if not user: 
+            conn.close()
+            return await ctx.send("Use !start first.")
+        if user[1] < 10: 
+            conn.close()
+            return await ctx.send("❌ You are too exhausted to work. Rest your body.")
 
         # --- Random earnings logic ---
         income = random.randint(5, 15)
@@ -49,22 +53,38 @@ class Actions(commands.Cog):
         """The path to gathering Ki."""
         conn = self.get_db()
         c = conn.cursor()
-        user = c.execute("SELECT background, vitality FROM users WHERE user_id=?", (ctx.author.id,)).fetchone()
+        # We now fetch 'ki' to check the cap
+        user = c.execute("SELECT background, vitality, ki FROM users WHERE user_id=?", (ctx.author.id,)).fetchone()
         
-        if not user: return await ctx.send("Use !start first.")
-        if user[1] < 10: return await ctx.send("❌ Your mind is too weary to focus on the world's flow.")
+        if not user: 
+            conn.close()
+            return await ctx.send("Use !start first.")
+        
+        background, vitality, current_ki = user[0], user[1], user[2]
+        
+        # --- The Vessel Cap Check (100 Ki for Mortals) ---
+        if current_ki >= 100:
+            conn.close()
+            return await ctx.send("❌ Your mortal vessel is full. You cannot gather more Ki until you **!breakthrough**.")
+            
+        if vitality < 10: 
+            conn.close()
+            return await ctx.send("❌ Your mind is too weary to focus on the world's flow.")
 
         # --- Ki Gain Logic ---
         gain = random.randint(5, 10)
         
         # --- Hermit Bonus Logic ---
-        if user[0] == "Hermit":
+        if background == "Hermit":
             gain = int(gain * 1.2) # +20% Ki
             msg = f"🧘 [Hermit] Your pure heart resonates with the world. Gained **{gain} Ki**."
         else:
             msg = f"✨ You observed the flow of nature and gathered **{gain} Ki**."
 
-        c.execute("UPDATE users SET ki = ki + ?, vitality = vitality - 10 WHERE user_id = ?", (gain, ctx.author.id))
+        # Apply the cap to the final update so it doesn't exceed 100
+        new_ki = min(100, current_ki + gain)
+
+        c.execute("UPDATE users SET ki = ?, vitality = vitality - 10 WHERE user_id = ?", (new_ki, ctx.author.id))
         conn.commit()
         conn.close()
         await ctx.send(msg)
@@ -80,10 +100,13 @@ class Actions(commands.Cog):
         c = conn.cursor()
         user = c.execute("SELECT vitality FROM users WHERE user_id=?", (ctx.author.id,)).fetchone()
         
-        if not user: return await ctx.send("Use !start first.")
+        if not user: 
+            conn.close()
+            return await ctx.send("Use !start first.")
         
         if user[0] >= 100:
             self.rest.reset_cooldown(ctx)
+            conn.close()
             return await ctx.send("Your body is already at its peak. You do not need rest.")
 
         # --- Recovery Logic ---
