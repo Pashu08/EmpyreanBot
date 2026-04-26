@@ -10,118 +10,67 @@ class Actions(commands.Cog):
     def get_db(self):
         return sqlite3.connect('murim.db')
 
-    # ==========================================
-    # COMMAND: !work (The Tael Grind)
-    # ==========================================
-    @commands.command()
+    @commands.command(name="work")
     async def work(self, ctx):
-        """The Mortal Struggle for money."""
         conn = self.get_db()
         c = conn.cursor()
-        user = c.execute("SELECT background, vitality FROM users WHERE user_id=?", (ctx.author.id,)).fetchone()
-        
-        if not user: 
-            conn.close()
-            return await ctx.send("Use !start first.")
-        if user[1] < 10: 
-            conn.close()
-            return await ctx.send("❌ You are too exhausted to work. Rest your body.")
+        user = c.execute("SELECT vitality, taels FROM users WHERE user_id=?", (ctx.author.id,)).fetchone()
 
-        # --- Random earnings logic ---
-        income = random.randint(5, 15)
+        if not user:
+            return await ctx.send("❌ You haven't started your journey. Use `!start`.")
         
-        # --- Applying the Blueprint Background Logic ---
-        if user[0] == "Laborer":
-            income = int(income * 0.5) # 50% Tax
-            msg = f"🔨 [Laborer] You worked the docks. After the foreman's cut, you earned **{income} Taels**."
-        elif user[0] == "Urchin" and random.random() < 0.1:
-            income = 0 # 10% Mugging chance
-            msg = "💸 [Urchin] A group of thugs cornered you in an alley! You lost your day's earnings."
-        else:
-            msg = f"💰 You completed your labor and earned **{income} Taels**."
+        vit, taels = user
+        if vit < 10:
+            return await ctx.send("❌ Your body is too exhausted to work. Rest or use a pulse.")
 
-        c.execute("UPDATE users SET taels = taels + ?, vitality = vitality - 10 WHERE user_id = ?", (income, ctx.author.id))
+        # Gains and Costs
+        gain = random.randint(5, 15)
+        new_vit = vit - 10
+        new_taels = taels + gain
+
+        c.execute("UPDATE users SET vitality=?, taels=? WHERE user_id=?", (new_vit, new_taels, ctx.author.id))
         conn.commit()
         conn.close()
-        await ctx.send(msg)
 
-    # ==========================================
-    # COMMAND: !observe (The Path to Ki)
-    # ==========================================
-    @commands.command()
+        # --- THE PROFESSIONAL BOX ---
+        embed = discord.Embed(title="⚒️ Manual Labor", color=0x700000)
+        embed.description = f"You spent hours performing grueling tasks for the local merchants."
+        embed.add_field(name="Gained", value=f"💰 **+{gain}** Taels", inline=True)
+        embed.add_field(name="Vitality Left", value=f"❤️ **{new_vit}**/100", inline=True)
+        embed.set_footer(text=f"Current Total: {new_taels} Taels")
+        
+        await ctx.send(embed=embed)
+
+    @commands.command(name="observe")
     async def observe(self, ctx):
-        """The path to gathering Ki."""
         conn = self.get_db()
         c = conn.cursor()
-        # We now fetch 'ki' to check the cap
-        user = c.execute("SELECT background, vitality, ki FROM users WHERE user_id=?", (ctx.author.id,)).fetchone()
-        
-        if not user: 
-            conn.close()
-            return await ctx.send("Use !start first.")
-        
-        background, vitality, current_ki = user[0], user[1], user[2]
-        
-        # --- The Vessel Cap Check (100 Ki for Mortals) ---
-        if current_ki >= 100:
-            conn.close()
-            return await ctx.send("❌ Your mortal vessel is full. You cannot gather more Ki until you **!breakthrough**.")
-            
-        if vitality < 10: 
-            conn.close()
-            return await ctx.send("❌ Your mind is too weary to focus on the world's flow.")
+        user = c.execute("SELECT vitality, ki FROM users WHERE user_id=?", (ctx.author.id,)).fetchone()
 
-        # --- Ki Gain Logic ---
-        gain = random.randint(5, 10)
-        
-        # --- Hermit Bonus Logic ---
-        if background == "Hermit":
-            gain = int(gain * 1.2) # +20% Ki
-            msg = f"🧘 [Hermit] Your pure heart resonates with the world. Gained **{gain} Ki**."
-        else:
-            msg = f"✨ You observed the flow of nature and gathered **{gain} Ki**."
+        if not user:
+            return await ctx.send("❌ You haven't started your journey. Use `!start`.")
 
-        # Apply the cap to the final update so it doesn't exceed 100
-        new_ki = min(100, current_ki + gain)
+        vit, ki = user
+        if vit < 10:
+            return await ctx.send("❌ Your mind is too clouded by fatigue. You cannot observe.")
 
-        c.execute("UPDATE users SET ki = ?, vitality = vitality - 10 WHERE user_id = ?", (new_ki, ctx.author.id))
+        # Gains and Costs
+        gain = random.randint(3, 8)
+        new_vit = vit - 10
+        new_ki = ki + gain
+
+        c.execute("UPDATE users SET vitality=?, ki=? WHERE user_id=?", (new_vit, new_ki, ctx.author.id))
         conn.commit()
         conn.close()
-        await ctx.send(msg)
 
-    # ==========================================
-    # COMMAND: !rest (Vitality Recovery)
-    # ==========================================
-    @commands.command()
-    @commands.cooldown(1, 300, commands.BucketType.user) # 5 Min Cooldown
-    async def rest(self, ctx):
-        """Rest to recover Vitality."""
-        conn = self.get_db()
-        c = conn.cursor()
-        user = c.execute("SELECT vitality FROM users WHERE user_id=?", (ctx.author.id,)).fetchone()
-        
-        if not user: 
-            conn.close()
-            return await ctx.send("Use !start first.")
-        
-        if user[0] >= 100:
-            self.rest.reset_cooldown(ctx)
-            conn.close()
-            return await ctx.send("Your body is already at its peak. You do not need rest.")
+        # --- THE PROFESSIONAL BOX ---
+        embed = discord.Embed(title="👁️ Deep Observation", color=0x00AABB)
+        embed.description = f"You sat in silence, watching the flow of the world and the breath of the heavens."
+        embed.add_field(name="Ki Refined", value=f"✨ **+{gain}** Ki", inline=True)
+        embed.add_field(name="Vitality Left", value=f"❤️ **{new_vit}**/100", inline=True)
+        embed.set_footer(text=f"Current Progress: {new_ki}/100 Ki")
 
-        # --- Recovery Logic ---
-        new_vit = min(100, user[0] + 20)
-        c.execute("UPDATE users SET vitality = ? WHERE user_id = ?", (new_vit, ctx.author.id))
-        conn.commit()
-        conn.close()
-        await ctx.send(f"🛌 You found a quiet spot to rest. Your Vitality is now **{new_vit}/100**.")
-
-    @rest.error
-    async def rest_error(self, ctx, error):
-        if isinstance(error, commands.CommandOnCooldown):
-            minutes = int(error.retry_after // 60)
-            seconds = int(error.retry_after % 60)
-            await ctx.send(f"⏳ You cannot rest again so soon. Wait **{minutes}m {seconds}s**.")
+        await ctx.send(embed=embed)
 
 async def setup(bot):
     await bot.add_cog(Actions(bot))
