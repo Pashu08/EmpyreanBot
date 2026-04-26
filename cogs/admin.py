@@ -17,7 +17,21 @@ class Admin(commands.Cog):
         return sqlite3.connect('murim.db')
 
     # ==========================================
-    # GHOST PROTOCOL: !divine (DM Command List)
+    # SYNC COMMAND (Fixes Slash Menu)
+    # ==========================================
+    @commands.command()
+    async def sync(self, ctx):
+        """Forces Discord to show your bot's Slash Commands."""
+        if not self.is_admin(ctx.author.id): return
+        await ctx.send("📡 Syncing with the heavens...")
+        try:
+            synced = await self.bot.tree.sync()
+            await ctx.send(f"✅ Success! **{len(synced)}** commands registered to the `/` menu.")
+        except Exception as e:
+            await ctx.send(f"❌ Sync failed: {e}")
+
+    # ==========================================
+    # GHOST PROTOCOL: !divine
     # ==========================================
     @commands.command()
     async def divine(self, ctx):
@@ -26,14 +40,14 @@ class Admin(commands.Cog):
         
         embed = discord.Embed(title="⚡ The Divine Scroll", color=0xFFD700)
         embed.description = (
-            "**Control the World from the Shadows:**\n\n"
+            "**Admin Commands:**\n"
+            "`!sync` - Register Slash Commands\n"
+            "`!pulse` - Force Recovery Heartbeat\n"
             "`!promote @user` - Grant God Powers\n"
             "`!demote @user` - Strip God Powers\n"
             "`!setki <num> @user` - Set Ki levels\n"
-            "`!refill @user` - Restore Vitality (Auto-detects Rank)\n"
-            "`!reset @user` - Wipe a user's existence\n"
-            "`!pulse` - Force the global recovery heartbeat\n\n"
-            "*Your commands in the server will be auto-deleted.*"
+            "`!refill @user` - Full HP/Vit restoration\n"
+            "`!reset @user` - Erase a player"
         )
         try:
             await ctx.author.send(embed=embed)
@@ -41,38 +55,26 @@ class Admin(commands.Cog):
             await ctx.send("❌ Open your DMs.", delete_after=5)
 
     # ==========================================
-    # NEW: !pulse (Trigger Recovery)
+    # DIVINE PULSE
     # ==========================================
     @commands.command()
     async def pulse(self, ctx):
-        """Forces the heartbeat in mechanics.py to run immediately."""
         if not self.is_admin(ctx.author.id): return
         await ctx.message.delete()
-        
-        # This tells the mechanics cog to run its heartbeat logic right now
         mechanics_cog = self.bot.get_cog('Mechanics')
         if mechanics_cog:
             await mechanics_cog.heartbeat()
-            await ctx.send("🌀 **Divine Pulse:** The world's energy has shifted (Recovery Triggered).", delete_after=5)
-        else:
-            await ctx.send("❌ Mechanics system not found.", delete_after=5)
+            await ctx.send("🌀 **Divine Pulse:** Recovery triggered.", delete_after=5)
 
     # ==========================================
-    # DIVINE DECREE (Existing Ghost Commands)
+    # USER MANAGEMENT
     # ==========================================
     @commands.command()
     async def promote(self, ctx, member: discord.Member):
         if ctx.author.id != PERMANENT_GOD: return
         await ctx.message.delete()
         temporary_gods.add(member.id)
-        await ctx.send(f"🌟 {member.mention} has been granted Divine Authority.", delete_after=5)
-
-    @commands.command()
-    async def demote(self, ctx, member: discord.Member):
-        if ctx.author.id != PERMANENT_GOD: return
-        await ctx.message.delete()
-        temporary_gods.discard(member.id)
-        await ctx.send(f"🌑 {member.mention} has been stripped of authority.", delete_after=5)
+        await ctx.send(f"🌟 {member.mention} promoted.", delete_after=5)
 
     @commands.command()
     async def reset(self, ctx, member: discord.Member = None):
@@ -104,14 +106,12 @@ class Admin(commands.Cog):
         conn = self.get_db()
         c = conn.cursor()
         user = c.execute("SELECT rank FROM users WHERE user_id = ?", (target.id,)).fetchone()
-        if not user:
-            conn.close()
-            return
+        if not user: return
         max_v = 300 if "Third-Rate" in user[0] else 100
-        c.execute("UPDATE users SET vitality = ? WHERE user_id = ?", (max_v, target.id))
+        c.execute("UPDATE users SET vitality = ?, hp = ? WHERE user_id = ?", (max_v, max_v, target.id))
         conn.commit()
         conn.close()
-        await ctx.send(f"🍷 **Divine Favor:** {target.name} restored to {max_v}.", delete_after=5)
+        await ctx.send(f"🍷 **Divine Favor:** {target.name} restored.", delete_after=5)
 
 async def setup(bot):
     await bot.add_cog(Admin(bot))

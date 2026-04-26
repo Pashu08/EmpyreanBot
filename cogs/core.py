@@ -2,66 +2,67 @@ import discord
 from discord.ext import commands
 import sqlite3
 
+# --- THE BUTTON MENU ---
+class StartMenu(discord.ui.View):
+    def __init__(self, ctx, db_func):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+        self.get_db = db_func
+
+    async def handle_start(self, interaction, background, item):
+        if interaction.user.id != self.ctx.author.id:
+            return await interaction.response.send_message("This isn't your destiny.", ephemeral=True)
+
+        conn = self.get_db()
+        c = conn.cursor()
+        
+        # Check if they exist again just to be safe
+        user = c.execute("SELECT user_id FROM users WHERE user_id=?", (interaction.user.id,)).fetchone()
+        if user:
+            conn.close()
+            return await interaction.response.send_message("❌ You are already on a path.", ephemeral=True)
+
+        c.execute("INSERT INTO users (user_id, background, rank, item_id, taels, ki, vitality, hp) VALUES (?, ?, ?, ?, 0, 0, 100, 100)",
+                  (interaction.user.id, background, "The Bound (Mortal)", item))
+        conn.commit()
+        conn.close()
+        
+        await interaction.response.send_message(f"✅ Journey started as **{background}**! You received: **{item}**.")
+        self.stop() # Close the menu
+
+    @discord.ui.button(label="Laborer", style=discord.ButtonStyle.green, emoji="⚒️")
+    async def laborer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_start(interaction, "Laborer", "Torn Page")
+
+    @discord.ui.button(label="Outcast", style=discord.ButtonStyle.grey, emoji="🌑")
+    async def outcast(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_start(interaction, "Outcast", "Black Coin")
+
+    @discord.ui.button(label="Hermit", style=discord.ButtonStyle.blurple, emoji="🌿")
+    async def hermit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_start(interaction, "Hermit", "Glowing Fruit")
+
+# --- THE COG ---
 class Core(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.init_db()
 
     def get_db(self):
         return sqlite3.connect('murim.db')
 
-    def init_db(self):
-        """Checks and adds missing columns automatically."""
-        conn = self.get_db()
-        c = conn.cursor()
-        # Create table if it doesn't exist
-        c.execute('''CREATE TABLE IF NOT EXISTS users 
-                     (user_id INTEGER PRIMARY KEY, background TEXT, rank TEXT, 
-                      item_id TEXT, taels INTEGER, ki INTEGER, vitality INTEGER, hp INTEGER)''')
-        
-        # Auto-add missing columns if they were forgotten in previous versions
-        c.execute("PRAGMA table_info(users)")
-        columns = [column[1] for column in c.fetchall()]
-        
-        required_columns = {
-            "rank": "TEXT DEFAULT 'The Bound (Mortal)'",
-            "hp": "INTEGER DEFAULT 100",
-            "item_id": "TEXT",
-            "taels": "INTEGER DEFAULT 0",
-            "ki": "INTEGER DEFAULT 0",
-            "vitality": "INTEGER DEFAULT 100"
-        }
-
-        for col, definition in required_columns.items():
-            if col not in columns:
-                c.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
-        
-        conn.commit()
-        conn.close()
-
-    @commands.hybrid_command(name="start")
-    async def start(self, ctx, background: str):
-        """Starts the journey with Outcast instead of Urchin."""
+    @commands.command(name="start")
+    async def start(self, ctx):
+        """Opens the choice menu for new players."""
         conn = self.get_db()
         c = conn.cursor()
         user = c.execute("SELECT user_id FROM users WHERE user_id=?", (ctx.author.id,)).fetchone()
-        if user: return await ctx.send("❌ You are already walking the path.")
-
-        # Updated: Urchin is now Outcast
-        starters = {"Laborer": "Torn Page", "Outcast": "Black Coin", "Hermit": "Glowing Fruit"}
-        
-        # Standardize background name to catch any typos
-        background = background.capitalize()
-        if background not in starters:
-            return await ctx.send("❌ Choose: Laborer, Outcast, or Hermit.")
-
-        item = starters[background]
-        
-        c.execute("INSERT INTO users (user_id, background, rank, item_id, taels, ki, vitality, hp) VALUES (?, ?, ?, ?, 0, 0, 100, 100)",
-                  (ctx.author.id, background, "The Bound (Mortal)", item))
-        conn.commit()
         conn.close()
-        await ctx.send(f"✅ Journey started as **{background}** with **{item}**.")
+
+        if user:
+            return await ctx.send("❌ Your path is already set. Check your `!stats`.")
+
+        view = StartMenu(ctx, self.get_db)
+        await ctx.send("🏮 **Select Your Origin** 🏮\nYour choice will determine your struggle and your eventual power.", view=view)
 
 async def setup(bot):
     await bot.add_cog(Core(bot))
