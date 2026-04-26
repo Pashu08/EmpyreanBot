@@ -10,27 +10,46 @@ class Status(commands.Cog):
         return sqlite3.connect('murim.db')
 
     # ==========================================
-    # COMMAND: !stats (The Mortal Status)
+    # HYBRID COMMAND: !stats / /stats
     # ==========================================
-    @commands.command()
+    @commands.hybrid_command(name="stats", description="Displays your current progress and status.")
     async def stats(self, ctx):
         """Displays your current progress and status."""
         conn = self.get_db()
         c = conn.cursor()
-        user = c.execute("SELECT background, taels, ki, vitality, item_id FROM users WHERE user_id=?", (ctx.author.id,)).fetchone()
+        
+        # We now pull EVERY relevant column from your Phase 1 Plan
+        user = c.execute("""
+            SELECT background, rank, taels, ki, vitality, hp, item_id 
+            FROM users WHERE user_id=?
+        """, (ctx.author.id,)).fetchone()
         conn.close()
 
         if not user:
-            return await ctx.send("You have no status. Use !start to begin your struggle.")
+            return await ctx.send("❌ You have no status. Use /start to begin your struggle.")
 
-        embed = discord.Embed(title=f"Status: {ctx.author.name}", color=0x700000)
-        embed.add_field(name="Rank/Background", value=user[0], inline=True)
-        embed.add_field(name="Vitality", value=f"❤️ {user[3]}/100", inline=True)
-        embed.add_field(name="Taels", value=f"💰 {user[1]}", inline=True)
-        embed.add_field(name="Ki", value=f"✨ {user[2]}", inline=True)
-        embed.add_field(name="Innate Item", value=f"📦 {user[4]}", inline=False)
+        # Mapping the database results to variables
+        bg, rank, taels, ki, vit, hp, item = user
+
+        embed = discord.Embed(title=f"📜 Status: {ctx.author.name}", color=0x700000)
+        
+        # Section 1: Identity & Rank
+        embed.add_field(name="Background", value=bg, inline=True)
+        embed.add_field(name="Current Rank", value=f"**{rank}**", inline=True)
+        
+        # Section 2: Vital Statistics
+        embed.add_field(name="HP", value=f"🩸 {hp}/100", inline=True)
+        embed.add_field(name="Vitality", value=f"❤️ {vit}/100", inline=True)
+        
+        # Section 3: Progress & Wealth
+        embed.add_field(name="Ki", value=f"✨ {ki}/100", inline=True)
+        embed.add_field(name="Taels", value=f"💰 {taels}", inline=True)
+        
+        # Section 4: The Innate Item (This will show the Mutated version after breakthrough)
+        embed.add_field(name="Innate Item", value=f"📦 {item}", inline=False)
+        
+        embed.set_footer(text="Focus your spirit. Break your chains.")
         await ctx.send(embed=embed)
 
 async def setup(bot):
     await bot.add_cog(Status(bot))
-

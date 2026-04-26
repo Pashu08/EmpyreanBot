@@ -41,14 +41,21 @@ class Core(commands.Cog):
 
     @commands.hybrid_command(name="start")
     async def start(self, ctx, background: str):
-        """Starts the journey with correct items."""
+        """Starts the journey with Outcast instead of Urchin."""
         conn = self.get_db()
         c = conn.cursor()
         user = c.execute("SELECT user_id FROM users WHERE user_id=?", (ctx.author.id,)).fetchone()
         if user: return await ctx.send("❌ You are already walking the path.")
 
-        starters = {"Laborer": "Torn Page", "Urchin": "Black Coin", "Hermit": "Glowing Fruit"}
-        item = starters.get(background, "Stick")
+        # Updated: Urchin is now Outcast
+        starters = {"Laborer": "Torn Page", "Outcast": "Black Coin", "Hermit": "Glowing Fruit"}
+        
+        # Standardize background name to catch any typos
+        background = background.capitalize()
+        if background not in starters:
+            return await ctx.send("❌ Choose: Laborer, Outcast, or Hermit.")
+
+        item = starters[background]
         
         c.execute("INSERT INTO users (user_id, background, rank, item_id, taels, ki, vitality, hp) VALUES (?, ?, ?, ?, 0, 0, 100, 100)",
                   (ctx.author.id, background, "The Bound (Mortal)", item))
