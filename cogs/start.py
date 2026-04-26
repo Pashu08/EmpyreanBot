@@ -19,7 +19,6 @@ class Start(commands.Cog):
             conn.close()
             return
 
-        # Simple selection buttons (we'll use text for now for ease of use)
         view = BackgroundView(ctx.author)
         await ctx.send("Choose your past, Mortal. It will define your struggle.", view=view)
         conn.close()
@@ -32,8 +31,9 @@ class BackgroundView(discord.ui.View):
     async def register_user(self, interaction, bg, item):
         conn = sqlite3.connect('murim.db')
         c = conn.cursor()
-        # Initialize user with Phase 1 stats
-        c.execute("INSERT INTO users (user_id, background, item_id) VALUES (?, ?, ?)", 
+        # I added the stats here so players start with 100 Vitality and 0 Ki/Taels
+        c.execute("""INSERT INTO users (user_id, background, item_id, taels, ki, vitality) 
+                     VALUES (?, ?, ?, 0, 0, 100)""", 
                   (interaction.user.id, bg, item))
         conn.commit()
         conn.close()
@@ -41,14 +41,17 @@ class BackgroundView(discord.ui.View):
 
     @discord.ui.button(label="Laborer", style=discord.ButtonStyle.grey)
     async def laborer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author.id: return
         await self.register_user(interaction, "Laborer", "Torn Page")
 
     @discord.ui.button(label="Urchin", style=discord.ButtonStyle.grey)
     async def urchin(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author.id: return
         await self.register_user(interaction, "Urchin", "Black Coin")
 
     @discord.ui.button(label="Hermit", style=discord.ButtonStyle.grey)
     async def hermit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author.id: return
         await self.register_user(interaction, "Hermit", "Glowing Fruit")
 
 async def setup(bot):
