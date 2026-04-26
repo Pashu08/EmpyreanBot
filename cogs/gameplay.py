@@ -85,6 +85,37 @@ class Gameplay(commands.Cog):
         conn.commit()
         conn.close()
         await ctx.send(msg)
+        
+            @commands.command()
+    @commands.cooldown(1, 300, commands.BucketType.user) # 5-minute cooldown (300 seconds)
+    async def rest(self, ctx):
+        """Rest to recover Vitality."""
+        conn = self.get_db()
+        c = conn.cursor()
+        user = c.execute("SELECT vitality FROM users WHERE user_id=?", (ctx.author.id,)).fetchone()
+        
+        if not user: return await ctx.send("Use !start first.")
+        
+        if user[0] >= 100:
+            self.rest.reset_cooldown(ctx) # Don't waste the cooldown if they are full
+            return await ctx.send("Your body is already at its peak. You do not need rest.")
+
+        # Recover 20 Vitality, but cap it at 100
+        new_vit = min(100, user[0] + 20)
+        
+        c.execute("UPDATE users SET vitality = ? WHERE user_id = ?", (new_vit, ctx.author.id))
+        conn.commit()
+        conn.close()
+        
+        await ctx.send(f"🛌 You found a quiet spot to rest. Your Vitality is now **{new_vit}/100**.")
+
+    @rest.error
+    async def rest_error(self, ctx, error):
+        if isinstance(error, commands.CommandOnCooldown):
+            minutes = int(error.retry_after // 60)
+            seconds = int(error.retry_after % 60)
+            await ctx.send(f"⏳ You cannot rest again so soon. Wait **{minutes}m {seconds}s**.")
+
 
 async def setup(bot):
     await bot.add_cog(Gameplay(bot))
