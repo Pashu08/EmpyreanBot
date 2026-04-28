@@ -17,7 +17,7 @@ class Admin(commands.Cog):
         return sqlite3.connect('murim.db')
 
     # ==========================================
-    # SYNC COMMAND (Fixes Slash Menu)
+    # SYNC COMMAND (Invisible to players)
     # ==========================================
     @commands.command()
     async def sync(self, ctx):
@@ -25,6 +25,7 @@ class Admin(commands.Cog):
         if not self.is_admin(ctx.author.id): return
         await ctx.send("📡 Syncing with the heavens...")
         try:
+            # This is the V2 magic that makes your other cogs' slash commands appear
             synced = await self.bot.tree.sync()
             await ctx.send(f"✅ Success! **{len(synced)}** commands registered to the `/` menu.")
         except Exception as e:
@@ -52,7 +53,7 @@ class Admin(commands.Cog):
         try:
             await ctx.author.send(embed=embed)
         except discord.Forbidden:
-            await ctx.send("❌ Open your DMs.", delete_after=5)
+            await ctx.send("❌ Open your DMs to receive the scroll.", delete_after=5)
 
     # ==========================================
     # DIVINE PULSE
@@ -74,7 +75,7 @@ class Admin(commands.Cog):
         if ctx.author.id != PERMANENT_GOD: return
         await ctx.message.delete()
         temporary_gods.add(member.id)
-        await ctx.send(f"🌟 {member.mention} promoted.", delete_after=5)
+        await ctx.send(f"🌟 {member.mention} promoted to Temporary God.", delete_after=5)
 
     @commands.command()
     async def reset(self, ctx, member: discord.Member = None):
@@ -85,7 +86,7 @@ class Admin(commands.Cog):
         conn.execute("DELETE FROM users WHERE user_id = ?", (target.id,))
         conn.commit()
         conn.close()
-        await ctx.send(f"♻️ **Divine Reset:** {target.name} erased.", delete_after=5)
+        await ctx.send(f"♻️ **Divine Reset:** {target.name} erased from history.", delete_after=5)
 
     @commands.command()
     async def setki(self, ctx, amount: int, member: discord.Member = None):
@@ -98,6 +99,9 @@ class Admin(commands.Cog):
         conn.close()
         await ctx.send(f"🪄 Ki set to {amount} for {target.name}.", delete_after=5)
 
+    # ==========================================
+    # REFILL: Updated for Second-Rate Warriors
+    # ==========================================
     @commands.command()
     async def refill(self, ctx, member: discord.Member = None):
         if not self.is_admin(ctx.author.id): return
@@ -106,12 +110,23 @@ class Admin(commands.Cog):
         conn = self.get_db()
         c = conn.cursor()
         user = c.execute("SELECT rank FROM users WHERE user_id = ?", (target.id,)).fetchone()
-        if not user: return
-        max_v = 300 if "Third-Rate" in user[0] else 100
+        
+        if not user: 
+            conn.close()
+            return
+
+        # UPDATED: Handles both 300 and 600 caps
+        if "Second-Rate" in user[0]:
+            max_v = 600
+        elif "Third-Rate" in user[0]:
+            max_v = 300
+        else:
+            max_v = 100
+
         c.execute("UPDATE users SET vitality = ?, hp = ? WHERE user_id = ?", (max_v, max_v, target.id))
         conn.commit()
         conn.close()
-        await ctx.send(f"🍷 **Divine Favor:** {target.name} restored.", delete_after=5)
+        await ctx.send(f"🍷 **Divine Favor:** {target.name} restored to {max_v} Vitality.", delete_after=5)
 
 async def setup(bot):
     await bot.add_cog(Admin(bot))
