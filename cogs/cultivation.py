@@ -1,13 +1,13 @@
 import discord
 from discord.ext import commands
-from discord import app_commands  # Added for V2
+from discord import app_commands
 import sqlite3
 import random
 import asyncio
 
 # --- BREAKTHROUGH UI ---
 class BreakthroughView(discord.ui.View):
-    def __init__(self, interaction, member_id, db_func): # Changed ctx to interaction for V2
+    def __init__(self, interaction, member_id, db_func):
         super().__init__(timeout=60)
         self.interaction = interaction
         self.member_id = member_id
@@ -15,7 +15,6 @@ class BreakthroughView(discord.ui.View):
         self.stage = 1
         self.success_count = 0
         
-        # Define the story prompts
         self.prompts = [
             {
                 "text": "🌀 **Stage 1: The Gathering**\nYour Ki is swirling violently within your dantian. It feels like molten lead. How do you stabilize the flow?",
@@ -60,31 +59,34 @@ class BreakthroughView(discord.ui.View):
         c = conn.cursor()
         
         if self.success_count >= 2:
-            # SUCCESS LOGIC - DETERMINING NEXT RANK AND CAP
             user_data = c.execute("SELECT rank, item_id FROM users WHERE user_id=?", (self.member_id,)).fetchone()
             current_rank, current_item = user_data
 
+            # PHASE 2 ASCENSION LOGIC
             if "Mortal" in current_rank:
                 new_rank = "Third-Rate Warrior"
                 new_cap = 300
-            else:
+            elif "Third-Rate" in current_rank:
                 new_rank = "Second-Rate Warrior"
                 new_cap = 600
+            else:
+                new_rank = "First-Rate Warrior"
+                new_cap = 1000
 
-            # Mutation Logic
             mutations = {"Torn Page": "Jade Scripture", "Black Coin": "Shadow Seal", "Glowing Fruit": "Verdant Bone"}
             new_item = mutations.get(current_item, current_item)
 
-            c.execute("UPDATE users SET rank=?, item_id=?, ki=0, vitality=?, hp=? WHERE user_id=?", 
+            # Reset Ki to 0 and set stage to Initial upon success
+            c.execute("UPDATE users SET rank=?, stage='Initial', item_id=?, ki=0, vitality=?, hp=? WHERE user_id=?", 
                       (new_rank, new_item, new_cap, new_cap, self.member_id))
             
-            result_embed = discord.Embed(title="🎊 BREAKTHROUGH SUCCESS", 
-                                        description=f"You have ascended to **{new_rank}**!\nYour item has evolved into: **{new_item}**.\nYour limits have expanded to **{new_cap}**!", 
+            result_embed = discord.Embed(title="🎊 REALM ASCENSION SUCCESS", 
+                                        description=f"You have reached the **{new_rank}**!\nYour item has evolved into: **{new_item}**.\nYour limits have expanded to **{new_cap}**!", 
                                         color=0x00FF00)
         else:
-            c.execute("UPDATE users SET ki = MAX(0, ki - 70) WHERE user_id=?", (self.member_id,))
+            c.execute("UPDATE users SET ki = MAX(0, ki - 100) WHERE user_id=?", (self.member_id,))
             result_embed = discord.Embed(title="💀 BREAKTHROUGH FAILED", 
-                                        description="The energy backfired. Your meridians are damaged and you lost 70 Ki.", 
+                                        description="The energy backfired. Your meridians are damaged and you lost 100 Ki.", 
                                         color=0xFF0000)
         
         conn.commit()
@@ -99,47 +101,45 @@ class Cultivation(commands.Cog):
     def get_db(self):
         return sqlite3.connect('murim.db')
 
-    # Hybrid Support: Both !breakthrough and /breakthrough
-    @commands.command(name="breakthrough")
-    @app_commands.command(name="breakthrough", description="Attempt to reach a higher cultivation rank")
-    async def breakthrough(self, ctx_or_interaction):
-        # Handle both Message and Interaction
-        is_interaction = isinstance(ctx_or_interaction, discord.Interaction)
-        user_id = ctx_or_interaction.user.id if is_interaction else ctx_or_interaction.author.id
-        
+    @commands.hybrid_command(name="breakthrough", description="Attempt to reach a higher Major Realm")
+    async def breakthrough(self, ctx):
+        user_id = ctx.author.id
         conn = self.get_db()
         c = conn.cursor()
-        user = c.execute("SELECT ki, rank FROM users WHERE user_id=?", (user_id,)).fetchone()
+        user = c.execute("SELECT ki, rank, background, stage FROM users WHERE user_id=?", (user_id,)).fetchone()
         conn.close()
 
         if not user: 
-            msg = "Start your journey first."
-            return await ctx_or_interaction.response.send_message(msg, ephemeral=True) if is_interaction else await ctx_or_interaction.send(msg)
+            return await ctx.send("Start your journey first.", ephemeral=True)
         
-        ki, rank = user[0], user[1]
+        ki, rank, bg, stage = user
+        
+        # --- PHASE 2 REQUIREMENT LOGIC ---
+        requirements = {
+            "The Bound (Mortal)": 100,
+            "Third-Rate Warrior": 1000,
+            "Second-Rate Warrior": 3000
+        }
+        
+        base_req = requirements.get(rank, 7500)
+        
+        # LABORER PERK: 15% lower Ki requirements
+        if bg == "Laborer":
+            base_req = int(base_req * 0.85)
 
-        # Dynamic Requirement Check
-        if "Mortal" in rank:
-            if ki < 100:
-                msg = f"❌ You need 100 Ki to reach Third-Rate. (Current: {ki})"
-                return await ctx_or_interaction.response.send_message(msg, ephemeral=True) if is_interaction else await ctx_or_interaction.send(msg)
-        elif "Third-Rate" in rank:
-            if ki < 300:
-                msg = f"❌ You need 300 Ki to reach Second-Rate. (Current: {ki})"
-                return await ctx_or_interaction.response.send_message(msg, ephemeral=True) if is_interaction else await ctx_or_interaction.send(msg)
-        else:
-            msg = "You have reached the peak."
-            return await ctx_or_interaction.response.send_message(msg, ephemeral=True) if is_interaction else await ctx_or_interaction.send(msg)
+        # STAGE LOCK: Must be at PEAK stage to attempt realm breakthrough
+        if stage != "Peak":
+            return await ctx.send(f"❌ You are currently in the **{stage}** stage. You must reach the **Peak** of your current realm first.", ephemeral=True)
 
-        view = BreakthroughView(ctx_or_interaction, user_id, self.get_db)
-        embed = discord.Embed(title="⚔️ Breakthrough Initiation", 
+        if ki < base_req:
+            return await ctx.send(f"❌ Your foundation is insufficient. You need **{base_req} Ki** for this ascension. (Current: {ki})", ephemeral=True)
+
+        view = BreakthroughView(ctx, user_id, self.get_db)
+        embed = discord.Embed(title="⚔️ Realm Ascension Initiation", 
                               description=view.prompts[0]["text"], 
                               color=0x700000)
         
-        if is_interaction:
-            await ctx_or_interaction.response.send_message(embed=embed, view=view)
-        else:
-            await ctx_or_interaction.send(embed=embed, view=view)
+        await ctx.send(embed=embed, view=view)
 
 async def setup(bot):
     await bot.add_cog(Cultivation(bot))
