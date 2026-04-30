@@ -11,8 +11,6 @@ def init_db():
     conn = sqlite3.connect('murim.db')
     c = conn.cursor()
     
-    # 1. Create the base table with ALL current columns
-    # This handles fresh installations perfectly
     c.execute('''CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY,
                     background TEXT,
@@ -34,8 +32,6 @@ def init_db():
                     prof_req_xp INTEGER DEFAULT 1000
                 )''')
     
-    # 2. AUTO-MIGRATION LOOP
-    # If the table already exists, this adds any missing columns automatically
     MIGRATIONS = [
         ("stage", "TEXT DEFAULT 'Initial'"),
         ("last_refresh", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
@@ -53,13 +49,11 @@ def init_db():
             c.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}")
             print(f"🛠️ Database Migration: Added missing column [{col_name}]")
         except sqlite3.OperationalError:
-            # Column already exists, move to next
             pass
 
     conn.commit()
     conn.close()
 
-# Run database setup
 init_db()
 
 # ==========================================
@@ -71,6 +65,8 @@ intents.members = True
 
 class MurimBot(commands.Bot):
     def __init__(self):
+        # Store config inside the bot so cogs can access it
+        self.config = config
         super().__init__(command_prefix=config.PREFIX, intents=intents)
 
     async def setup_hook(self):

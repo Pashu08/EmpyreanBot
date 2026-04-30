@@ -25,7 +25,6 @@ class Admin(commands.Cog):
         if not self.is_admin(ctx.author.id): return
         await ctx.send("📡 Syncing with the heavens...")
         try:
-            # This is the V2 magic that makes your other cogs' slash commands appear
             synced = await self.bot.tree.sync()
             await ctx.send(f"✅ Success! **{len(synced)}** commands registered to the `/` menu.")
         except Exception as e:
@@ -47,6 +46,8 @@ class Admin(commands.Cog):
             "`!promote @user` - Grant God Powers\n"
             "`!demote @user` - Strip God Powers\n"
             "`!setki <num> @user` - Set Ki levels\n"
+            "`!settaels <num> @user` - Set Tael amount\n"
+            "`!setmastery <num> @user` - Set Technique Mastery\n"
             "`!refill @user` - Full HP/Vit restoration\n"
             "`!reset @user` - Erase a player"
         )
@@ -78,6 +79,17 @@ class Admin(commands.Cog):
         await ctx.send(f"🌟 {member.mention} promoted to Temporary God.", delete_after=5)
 
     @commands.command()
+    async def demote(self, ctx, member: discord.Member):
+        """Removes a user from the temporary gods list."""
+        if ctx.author.id != PERMANENT_GOD: return
+        await ctx.message.delete()
+        if member.id in temporary_gods:
+            temporary_gods.remove(member.id)
+            await ctx.send(f"💢 {member.mention} stripped of Divine Power.", delete_after=5)
+        else:
+            await ctx.send(f"❌ {member.mention} is not a God.", delete_after=5)
+
+    @commands.command()
     async def reset(self, ctx, member: discord.Member = None):
         if not self.is_admin(ctx.author.id): return
         await ctx.message.delete()
@@ -100,7 +112,32 @@ class Admin(commands.Cog):
         await ctx.send(f"🪄 Ki set to {amount} for {target.name}.", delete_after=5)
 
     # ==========================================
-    # REFILL: Updated for Second-Rate Warriors
+    # NEW: TAEL & MASTERY CONTROL
+    # ==========================================
+    @commands.command()
+    async def settaels(self, ctx, amount: int, member: discord.Member = None):
+        if not self.is_admin(ctx.author.id): return
+        await ctx.message.delete()
+        target = member or ctx.author
+        conn = self.get_db()
+        conn.execute("UPDATE users SET taels = ? WHERE user_id = ?", (amount, target.id))
+        conn.commit()
+        conn.close()
+        await ctx.send(f"💰 Taels set to {amount} for {target.name}.", delete_after=5)
+
+    @commands.command()
+    async def setmastery(self, ctx, amount: float, member: discord.Member = None):
+        if not self.is_admin(ctx.author.id): return
+        await ctx.message.delete()
+        target = member or ctx.author
+        conn = self.get_db()
+        conn.execute("UPDATE users SET mastery = ? WHERE user_id = ?", (amount, target.id))
+        conn.commit()
+        conn.close()
+        await ctx.send(f"📖 Mastery set to {amount}% for {target.name}.", delete_after=5)
+
+    # ==========================================
+    # REFILL: Updated for Dynamic Scaling
     # ==========================================
     @commands.command()
     async def refill(self, ctx, member: discord.Member = None):
@@ -115,13 +152,8 @@ class Admin(commands.Cog):
             conn.close()
             return
 
-        # UPDATED: Handles both 300 and 600 caps
-        if "Second-Rate" in user[0]:
-            max_v = 600
-        elif "Third-Rate" in user[0]:
-            max_v = 300
-        else:
-            max_v = 100
+        caps = {"The Bound (Mortal)": 100, "Third-Rate Warrior": 300, "Second-Rate Warrior": 600}
+        max_v = caps.get(user[0], 1000)
 
         c.execute("UPDATE users SET vitality = ?, hp = ? WHERE user_id = ?", (max_v, max_v, target.id))
         conn.commit()

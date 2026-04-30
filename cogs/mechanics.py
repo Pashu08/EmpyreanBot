@@ -3,12 +3,13 @@ from discord.ext import commands, tasks
 from discord import app_commands
 import sqlite3
 import asyncio
+import datetime
 
 # --- PAVILION UI ---
 class PavilionView(discord.ui.View):
-    def __init__(self, interaction, member_id, db_func):
+    def __init__(self, ctx, member_id, db_func):
         super().__init__(timeout=60)
-        self.interaction = interaction
+        self.ctx = ctx
         self.member_id = member_id
         self.get_db = db_func
         
@@ -56,29 +57,27 @@ class Mechanics(commands.Cog):
     def get_db(self):
         return sqlite3.connect('murim.db')
 
+    # ==========================================
+    # HEARTBEAT LOOP (Automatic Recovery)
+    # ==========================================
     @tasks.loop(minutes=10.0)
     async def heartbeat(self):
         """Naturally restores HP and Vitality based on rank and current limits."""
         conn = self.get_db()
         c = conn.cursor()
         
-        # Pull rank to determine regen speed
         users = c.execute("SELECT user_id, hp, vitality, rank FROM users").fetchall()
         
         for user in users:
             u_id, current_hp, current_vit, rank = user
             
-            # 1. Base recovery speed per rank
             if "Second-Rate" in rank: regen = 25
             elif "Third-Rate" in rank: regen = 15
             else: regen = 5
             
-            # 2. Dynamic Cap Check
-            # Since breakthroughs add +200, we find the 'Base' for that rank
             caps = {"The Bound (Mortal)": 100, "Third-Rate Warrior": 300, "Second-Rate Warrior": 600}
             limit = caps.get(rank, 1000)
             
-            # Add regen but don't exceed limit
             new_hp = min(current_hp + regen, limit)
             new_vit = min(current_vit + regen, limit)
             
@@ -92,42 +91,44 @@ class Mechanics(commands.Cog):
     async def before_heartbeat(self):
         await self.bot.wait_until_ready()
 
-    @app_commands.command(name="pavilion", description="Enter the library to choose foundational techniques.")
-    async def pavilion(self, interaction: discord.Interaction):
+    # ==========================================
+    # HYBRID COMMANDS (!pavilion or /pavilion)
+    # ==========================================
+    @commands.hybrid_command(name="pavilion", description="Enter the library to choose foundational techniques.")
+    async def pavilion(self, ctx):
         conn = self.get_db()
         c = conn.cursor()
-        user = c.execute("SELECT rank, ki, active_tech FROM users WHERE user_id = ?", (interaction.user.id,)).fetchone()
+        user = c.execute("SELECT rank, ki, active_tech FROM users WHERE user_id = ?", (ctx.author.id,)).fetchone()
         conn.close()
 
         if not user:
-            return await interaction.response.send_message("❌ Use `/start` first.", ephemeral=True)
+            return await ctx.send("❌ Use `/start` first.", ephemeral=True)
 
         rank, ki, active_tech = user
 
         if active_tech == "None":
             if "Mortal" in rank and ki < 100:
-                return await interaction.response.send_message("❌ The scrolls are sealed. You need **100 Ki** to understand these foundations.", ephemeral=True)
+                return await ctx.send("❌ The scrolls are sealed. You need **100 Ki** to understand these foundations.", ephemeral=True)
             
-            view = PavilionView(interaction, interaction.user.id, self.get_db)
+            view = PavilionView(ctx, ctx.author.id, self.get_db)
             embed = discord.Embed(
                 title="🏮 Pavilion of Hidden Scrolls",
                 description="The air is thick with the scent of old paper. Four foundational scrolls sit before you.\n\n**Choose your path wisely.**",
                 color=0x700000
             )
-            return await interaction.response.send_message(embed=embed, view=view)
+            return await ctx.send(embed=embed, view=view)
 
-        await interaction.response.send_message(f"🧘 You are currently focusing on **{active_tech}**. Master it before seeking another.", ephemeral=True)
+        await ctx.send(f"🧘 You are currently focusing on **{active_tech}**. Master it before seeking another.", ephemeral=True)
 
-    @app_commands.command(name="meditate", description="Check natural recovery status")
-    async def meditate_status(self, interaction: discord.Interaction):
+    @commands.hybrid_command(name="meditate", description="Check natural recovery status")
+    async def meditate_status(self, ctx):
         next_it = self.heartbeat.next_iteration
         if next_it:
-            import datetime
             now = datetime.datetime.now(datetime.timezone.utc)
             time_left = next_it - now
             minutes = int(time_left.total_seconds() // 60)
             seconds = int(time_left.total_seconds() % 60)
-            await interaction.response.send_message(
+            await ctx.send(
                 f"🧘 The heavens will breathe again in **{minutes}m {seconds}s**, restoring your Vitality.", 
                 ephemeral=True
             )
