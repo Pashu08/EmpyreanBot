@@ -59,29 +59,34 @@ class BreakthroughView(discord.ui.View):
         c = conn.cursor()
         
         if self.success_count >= 2:
-            user_data = c.execute("SELECT rank, item_id FROM users WHERE user_id=?", (self.member_id,)).fetchone()
-            current_rank, current_item = user_data
+            # Fetch current stats to calculate the +200 boost
+            user_data = c.execute("SELECT rank, item_id, vitality, hp FROM users WHERE user_id=?", (self.member_id,)).fetchone()
+            current_rank, current_item, old_vit, old_hp = user_data
 
             # PHASE 2 ASCENSION LOGIC
             if "Mortal" in current_rank:
                 new_rank = "Third-Rate Warrior"
-                new_cap = 300
             elif "Third-Rate" in current_rank:
                 new_rank = "Second-Rate Warrior"
-                new_cap = 600
             else:
                 new_rank = "First-Rate Warrior"
-                new_cap = 1000
+
+            # VITALITY BOOST: +200 per breakthrough as requested
+            new_cap_vit = old_vit + 200
+            new_cap_hp = old_hp + 200
 
             mutations = {"Torn Page": "Jade Scripture", "Black Coin": "Shadow Seal", "Glowing Fruit": "Verdant Bone"}
             new_item = mutations.get(current_item, current_item)
 
-            # Reset Ki to 0 and set stage to Initial upon success
-            c.execute("UPDATE users SET rank=?, stage='Initial', item_id=?, ki=0, vitality=?, hp=? WHERE user_id=?", 
-                      (new_rank, new_item, new_cap, new_cap, self.member_id))
+            # Success updates
+            c.execute("""UPDATE users SET 
+                         rank=?, stage='Initial', item_id=?, ki=0, 
+                         vitality=?, hp=? 
+                         WHERE user_id=?""", 
+                      (new_rank, new_item, new_cap_vit, new_cap_hp, self.member_id))
             
             result_embed = discord.Embed(title="🎊 REALM ASCENSION SUCCESS", 
-                                        description=f"You have reached the **{new_rank}**!\nYour item has evolved into: **{new_item}**.\nYour limits have expanded to **{new_cap}**!", 
+                                        description=f"You have reached the **{new_rank}**!\nYour item has evolved into: **{new_item}**.\n\n📈 **Stat Growth:**\nMax Vitality: **{new_cap_vit}** (+200)\nMax HP: **{new_cap_hp}** (+200)", 
                                         color=0x00FF00)
         else:
             c.execute("UPDATE users SET ki = MAX(0, ki - 100) WHERE user_id=?", (self.member_id,))
@@ -106,13 +111,14 @@ class Cultivation(commands.Cog):
         user_id = ctx.author.id
         conn = self.get_db()
         c = conn.cursor()
-        user = c.execute("SELECT ki, rank, background, stage FROM users WHERE user_id=?", (user_id,)).fetchone()
+        # Added 'mastery' to the query for the Phase 2 check
+        user = c.execute("SELECT ki, rank, background, stage, mastery FROM users WHERE user_id=?", (user_id,)).fetchone()
         conn.close()
 
         if not user: 
             return await ctx.send("Start your journey first.", ephemeral=True)
         
-        ki, rank, bg, stage = user
+        ki, rank, bg, stage, mastery = user
         
         # --- PHASE 2 REQUIREMENT LOGIC ---
         requirements = {
@@ -127,12 +133,18 @@ class Cultivation(commands.Cog):
         if bg == "Laborer":
             base_req = int(base_req * 0.85)
 
-        # STAGE LOCK: Must be at PEAK stage to attempt realm breakthrough
+        # 1. STAGE LOCK: Must be at PEAK stage
         if stage != "Peak":
             return await ctx.send(f"❌ You are currently in the **{stage}** stage. You must reach the **Peak** of your current realm first.", ephemeral=True)
 
+        # 2. KI CHECK
         if ki < base_req:
-            return await ctx.send(f"❌ Your foundation is insufficient. You need **{base_req} Ki** for this ascension. (Current: {ki})", ephemeral=True)
+            return await ctx.send(f"❌ Your foundation is insufficient. You need **{base_req} Ki** for this ascension.", ephemeral=True)
+
+        # 3. MASTERY CHECK (Technique Library Bridge)
+        # To reach Third-Rate, they need 50% Mastery on their first technique
+        if "Mortal" in rank and (mastery is None or mastery < 50.0):
+            return await ctx.send("❌ To advance beyond the Mortal realm, you must master at least **50%** of a technique at the **Pavilion of Hidden Scrolls**.", ephemeral=True)
 
         view = BreakthroughView(ctx, user_id, self.get_db)
         embed = discord.Embed(title="⚔️ Realm Ascension Initiation", 
