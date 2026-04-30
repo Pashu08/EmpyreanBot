@@ -12,7 +12,6 @@ class PavilionView(discord.ui.View):
         self.member_id = member_id
         self.get_db = db_func
         
-        # Define the 4 Basic Techniques
         self.techniques = {
             "Flowing Cloud Steps": "💨 Focus: Dodge & Agility",
             "Swift Wind Kick": "🦶 Focus: Damage & Speed",
@@ -27,7 +26,7 @@ class PavilionView(discord.ui.View):
             btn.callback = self.select_tech
             self.add_item(btn)
 
-    async self.select_tech(self, interaction: discord.Interaction):
+    async def select_tech(self, interaction: discord.Interaction):
         if interaction.user.id != self.member_id:
             return await interaction.response.send_message("You cannot choose for another.", ephemeral=True)
             
@@ -35,7 +34,6 @@ class PavilionView(discord.ui.View):
         conn = self.get_db()
         c = conn.cursor()
         
-        # Bind the technique and set mastery to 0.0
         c.execute("UPDATE users SET active_tech = ?, mastery = 0.0 WHERE user_id = ?", (tech_name, self.member_id))
         conn.commit()
         conn.close()
@@ -58,35 +56,31 @@ class Mechanics(commands.Cog):
     def get_db(self):
         return sqlite3.connect('murim.db')
 
-    # ==========================================
-    # THE HEARTBEAT: Fixed for Dynamic Scaling
-    # ==========================================
     @tasks.loop(minutes=10.0)
     async def heartbeat(self):
-        """Naturally restores HP and Vitality based on Rank-scaled caps."""
+        """Naturally restores HP and Vitality based on rank and current limits."""
         conn = self.get_db()
         c = conn.cursor()
         
-        # We now pull the current values AND the limit we saved in cultivation.py
+        # Pull rank to determine regen speed
         users = c.execute("SELECT user_id, hp, vitality, rank FROM users").fetchall()
         
         for user in users:
             u_id, current_hp, current_vit, rank = user
             
-            # Regen amount scales by rank
+            # 1. Base recovery speed per rank
             if "Second-Rate" in rank: regen = 25
             elif "Third-Rate" in rank: regen = 15
             else: regen = 5
             
-            # Since we don't store "Max_Cap" as a separate column yet, 
-            # we use the logic: Mortal=100, 3rd=300, 2nd=600, etc.
-            # but allow for the +200 boosts added during breakthroughs.
+            # 2. Dynamic Cap Check
+            # Since breakthroughs add +200, we find the 'Base' for that rank
             caps = {"The Bound (Mortal)": 100, "Third-Rate Warrior": 300, "Second-Rate Warrior": 600}
-            base_cap = caps.get(rank, 1000)
+            limit = caps.get(rank, 1000)
             
-            # We ensure regen doesn't exceed the player's natural limit
-            new_hp = min(current_hp + regen, base_cap)
-            new_vit = min(current_vit + regen, base_cap)
+            # Add regen but don't exceed limit
+            new_hp = min(current_hp + regen, limit)
+            new_vit = min(current_vit + regen, limit)
             
             if new_hp != current_hp or new_vit != current_vit:
                 c.execute("UPDATE users SET hp = ?, vitality = ? WHERE user_id = ?", (new_hp, new_vit, u_id))
@@ -98,37 +92,31 @@ class Mechanics(commands.Cog):
     async def before_heartbeat(self):
         await self.bot.wait_until_ready()
 
-    # ==========================================
-    # THE PAVILION OF HIDDEN SCROLLS
-    # ==========================================
-    @app_commands.command(name="pavilion", description="Enter the library to choose or switch techniques.")
+    @app_commands.command(name="pavilion", description="Enter the library to choose foundational techniques.")
     async def pavilion(self, interaction: discord.Interaction):
         conn = self.get_db()
         c = conn.cursor()
-        user = c.execute("SELECT rank, ki, active_tech, profession FROM users WHERE user_id = ?", (interaction.user.id,)).fetchone()
+        user = c.execute("SELECT rank, ki, active_tech FROM users WHERE user_id = ?", (interaction.user.id,)).fetchone()
         conn.close()
 
         if not user:
-            return await interaction.response.send_message("❌ You have no presence in this world. Use `/start`.", ephemeral=True)
+            return await interaction.response.send_message("❌ Use `/start` first.", ephemeral=True)
 
-        rank, ki, active_tech, profession = user
+        rank, ki, active_tech = user
 
-        # 1. First Technique Requirement (Mortal & 100 Ki)
         if active_tech == "None":
             if "Mortal" in rank and ki < 100:
-                return await interaction.response.send_message("❌ The scrolls remain sealed. You need **100 Ki** to comprehend these foundations.", ephemeral=True)
+                return await interaction.response.send_message("❌ The scrolls are sealed. You need **100 Ki** to understand these foundations.", ephemeral=True)
             
             view = PavilionView(interaction, interaction.user.id, self.get_db)
             embed = discord.Embed(
                 title="🏮 Pavilion of Hidden Scrolls",
-                description="The air is thick with the scent of old paper and incense. Four foundational scrolls sit before you.\n\n**Choose your path wisely.**",
+                description="The air is thick with the scent of old paper. Four foundational scrolls sit before you.\n\n**Choose your path wisely.**",
                 color=0x700000
             )
             return await interaction.response.send_message(embed=embed, view=view)
 
-        # 2. Mastery Lock Check
-        # (Future logic for switching innate moves will go here)
-        await interaction.response.send_message(f"🧘 You are currently focusing on **{active_tech}**. You cannot look elsewhere until your mastery is complete.", ephemeral=True)
+        await interaction.response.send_message(f"🧘 You are currently focusing on **{active_tech}**. Master it before seeking another.", ephemeral=True)
 
     @app_commands.command(name="meditate", description="Check natural recovery status")
     async def meditate_status(self, interaction: discord.Interaction):
