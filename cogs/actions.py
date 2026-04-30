@@ -111,7 +111,10 @@ class Actions(commands.Cog):
     @work.error
     @observe.error
     async def action_error(self, ctx, error):
+        # Handles both slash and prefix cooldowns
         if isinstance(error, commands.CommandOnCooldown):
+            await ctx.send(f"⏳ **Focus your breathing.** Wait {error.retry_after:.1f}s.", ephemeral=True)
+        elif isinstance(error, app_commands.CommandOnCooldown):
             await ctx.send(f"⏳ **Focus your breathing.** Wait {error.retry_after:.1f}s.", ephemeral=True)
 
 async def setup(bot):

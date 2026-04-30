@@ -16,9 +16,12 @@ class StatusView(discord.ui.View):
 
     @discord.ui.button(label="🔄 Refresh", style=discord.ButtonStyle.gray)
     async def refresh_button(self, interaction: discord.Interaction):
-        # This triggers the refresh logic without needing a new prefix command
+        # FIXED: Defer immediately to prevent "Interaction Failed"
+        await interaction.response.defer()
+        
         cog = self.bot.get_cog('Status')
-        await cog.stats(interaction, self.target)
+        if cog:
+            await cog.stats(interaction, self.target)
 
 # ==========================================
 # CORE COG: STATUS & AFK ENGINE
@@ -47,13 +50,14 @@ class Status(commands.Cog):
         last_ref_dt = datetime.datetime.fromisoformat(last_ref)
         hours_passed = (now - last_ref_dt).total_seconds() / 3600
         
-        # Rank-based Ki accumulation
+        # BALANCE UPDATE: AFK is now 10 Ki/hr for Mortals.
+        # This makes it a slow trickle compared to the instant gains of !observe.
         rates = {
-            "The Bound (Mortal)": 5,
-            "Third-Rate Warrior": 15,
-            "Second-Rate Warrior": 40
+            "The Bound (Mortal)": 10,
+            "Third-Rate Warrior": 25,
+            "Second-Rate Warrior": 60
         }
-        base_rate = rates.get(rank, 5)
+        base_rate = rates.get(rank, 10)
         
         # 1. AFK Ki Gains
         ki_gained = int(base_rate * hours_passed)
@@ -89,7 +93,6 @@ class Status(commands.Cog):
     # ==========================================
     @commands.hybrid_command(name="stats", description="View progress and claim AFK gains.")
     async def stats(self, ctx_or_inter, member: discord.Member = None):
-        # Logic to determine if input is Interaction (Slash/Button) or Context (Prefix)
         is_interaction = isinstance(ctx_or_inter, discord.Interaction)
         author = ctx_or_inter.user if is_interaction else ctx_or_inter.author
         target = member or author
@@ -105,10 +108,13 @@ class Status(commands.Cog):
         if not row:
             msg = "❌ Path not found. Use `/start` first."
             if is_interaction:
-                return await ctx_or_inter.response.send_message(msg, ephemeral=True)
+                # If it's a button click from a non-existent user (shouldn't happen)
+                if not ctx_or_inter.response.is_done():
+                    return await ctx_or_inter.response.send_message(msg, ephemeral=True)
+                return
             return await ctx_or_inter.send(msg)
 
-        # Unpacking data (Matches SELECT order)
+        # Unpacking data
         u_id, bg, rank, stage, ki, mastery, last_ref, hp, vit, active_tech, profession, taels, item = row
 
         # Calculate AFK Gains
@@ -141,15 +147,11 @@ class Status(commands.Cog):
         
         embed.set_footer(text=f"Last Sync: {now.strftime('%H:%M:%S')}")
         
-        # Button logic
         view = StatusView(self.bot, target, self.get_db) if target.id == author.id else None
         
-        # Final response logic for Hybrid system
         if is_interaction:
-            if ctx_or_inter.response.is_done():
-                await ctx_or_inter.edit_original_response(embed=embed, view=view)
-            else:
-                await ctx_or_inter.response.send_message(embed=embed, view=view)
+            # We already deferred, so we edit the response
+            await ctx_or_inter.edit_original_response(embed=embed, view=view)
         else:
             await ctx_or_inter.send(embed=embed, view=view)
             

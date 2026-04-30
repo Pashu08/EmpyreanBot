@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import sqlite3
+import datetime
 
 # --- THE ENHANCED START MENU ---
 class StartMenu(discord.ui.View):
@@ -23,10 +24,13 @@ class StartMenu(discord.ui.View):
             conn.close()
             return await interaction.response.send_message("❌ You are already walking the path of cultivation.", ephemeral=True)
 
-        # Initializing with Mortal stats
-        c.execute("""INSERT INTO users (user_id, background, rank, item_id, taels, ki, vitality, hp, stage) 
-                     VALUES (?, ?, ?, ?, 0, 0, 100, 100, 'Initial')""",
-                  (interaction.user.id, background, "The Bound (Mortal)", item))
+        # FIXED: Capture current timestamp to prevent instant AFK gain glitch
+        now = datetime.datetime.now().isoformat()
+
+        # Initializing with Mortal stats and the correct starting timestamp
+        c.execute("""INSERT INTO users (user_id, background, rank, item_id, taels, ki, vitality, hp, stage, last_refresh) 
+                     VALUES (?, ?, ?, ?, 0, 0, 100, 100, 'Initial', ?)""",
+                  (interaction.user.id, background, "The Bound (Mortal)", item, now))
         conn.commit()
         conn.close()
         
