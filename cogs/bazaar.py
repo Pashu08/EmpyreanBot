@@ -11,7 +11,7 @@ class BazaarView(discord.ui.View):
         self.get_db = db_func
         self.background = user_data[1] 
         
-        # FIXED: Specifically targeting the Taels column to avoid the "Initial" text bug
+        # Pulling Taels from index 11 to avoid the "Initial" bug
         self.current_taels = user_data[11]      
         
         self.add_item(ShopDropdown(self.background))
@@ -19,8 +19,8 @@ class BazaarView(discord.ui.View):
 class ShopDropdown(discord.ui.Select):
     def __init__(self, background):
         options = [
-            discord.SelectOption(label="Apothecary", description="Pills and Medicines", emoji="💊"),
-            discord.SelectOption(label="Provisioner", description="Food and Recovery", emoji="🍱")
+            discord.SelectOption(label="Apothecary", description="Spiritual Pills", emoji="💊"),
+            discord.SelectOption(label="Provisioner", description="Sustenance", emoji="🍱")
         ]
         
         if background == "Outcast":
@@ -32,22 +32,22 @@ class ShopDropdown(discord.ui.Select):
         selection = self.values[0]
         view: BazaarView = self.view
         
+        # UPDATED: Using proper Murim names to match Items.py effects
         shops = {
             "Apothecary": [
-                ("Qi Condensing Pill", 100, "Restores 20 Ki instantly."),
-                ("Vitality Elixir", 150, "Restores 50% Max Vitality.")
+                ("Spirit Gathering Dan", 100, "Refines the soul. Restores 20 Ki."),
+                ("Jade Marrow Dew", 150, "Cool energy. Restores 50% Max Vitality.")
             ],
             "Provisioner": [
-                ("Herbal Soup", 30, "Minor Vitality recovery."),
-                ("Dried Rations", 10, "Cheap endurance food.")
+                ("Nine-Sun Restoration Soup", 30, "Warm soup. Restores 15 Vitality."),
+                ("Dried Rations", 10, "Travelers food. Restores 5 Vitality.")
             ],
             "Shady Dealer": [
-                ("Demonic Essence", 1000, "Huge Ki gain, but costs 50 HP.")
+                ("Blood-Burning Catalyst", 1000, "Forbidden boost. +100 Ki but -50 HP.")
             ]
         }
 
         items = shops.get(selection, [])
-        # Displaying the actual numerical Taels
         embed = discord.Embed(
             title=f"🏪 Bazaar: {selection}", 
             description=f"💰 Your Taels: **{view.current_taels}**",
@@ -83,7 +83,6 @@ class ItemSelect(discord.ui.Select):
         conn = self.get_db()
         c = conn.cursor()
         
-        # We query specifically for Taels and Items to be 100% sure we have numbers
         user = c.execute("SELECT taels, item_id FROM users WHERE user_id=?", (user_id,)).fetchone()
         
         if not user:
@@ -95,23 +94,22 @@ class ItemSelect(discord.ui.Select):
             return await interaction.response.send_message(f"❌ You need {item_price} Taels (You have {current_taels}).", ephemeral=True)
 
         new_taels = current_taels - item_price
+        # Correctly handles 'None' or empty inventory strings
         new_inv = f"{current_inv}, {item_name}" if current_inv and current_inv != "None" else item_name
         
         c.execute("UPDATE users SET taels = ?, item_id = ? WHERE user_id = ?", (new_taels, new_inv, user_id))
         conn.commit()
         conn.close()
 
-        # Update the live view so the next stall you click also shows the right amount
+        # Update view data and main embed display
         view.current_taels = new_taels
-        
-        # Update the text on the current screen
         main_embed = interaction.message.embeds[0]
         main_embed.description = f"💰 Your Taels: **{new_taels}**"
         
         self.placeholder = f"✅ Bought {item_name}!"
         
         await interaction.response.edit_message(embed=main_embed, view=view)
-        await interaction.followup.send(f"🛍️ You bought **{item_name}** for {item_price} Taels!", ephemeral=True)
+        await interaction.followup.send(f"🛍️ You purchased **{item_name}** for {item_price} Taels!", ephemeral=True)
 
 class Bazaar(commands.Cog):
     def __init__(self, bot):
@@ -124,14 +122,12 @@ class Bazaar(commands.Cog):
     async def bazaar(self, ctx):
         conn = self.get_db()
         c = conn.cursor()
-        # Fetching all columns for the specific user
         user_data = c.execute("SELECT * FROM users WHERE user_id = ?", (ctx.author.id,)).fetchone()
         conn.close()
 
         if not user_data:
             return await ctx.send("❌ You are not registered.", ephemeral=True)
 
-        # user_data[11] is the Taels column in your DB
         embed = discord.Embed(
             title="🏮 The Great Bazaar",
             description=f"💰 Your Taels: **{user_data[11]}**\n\nWelcome to the market. Select a stall below.",
