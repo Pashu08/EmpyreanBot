@@ -37,6 +37,7 @@ class Status(commands.Cog):
         return "🟥" * filled + "⬛" * (segments - filled)
 
     def process_afk_gains(self, user_data):
+        # u_id, bg, rank, stage, ki, mastery, last_ref, hp, vit, active_tech, profession
         u_id, bg, rank, stage, ki, mastery, last_ref, hp, vit, active_tech, profession = user_data
         now = datetime.datetime.now()
         if not last_ref: return ki, mastery, stage, hp, vit, now
@@ -75,19 +76,34 @@ class Status(commands.Cog):
         
         conn = self.get_db()
         c = conn.cursor()
-        row = c.execute("SELECT * FROM users WHERE user_id=?", (target.id,)).fetchone()
+        
+        # FIXED: Explicitly selecting 13 columns to prevent "Too many values to unpack"
+        row = c.execute("""
+            SELECT 
+                user_id, background, rank, stage, ki, 
+                mastery, last_refresh, hp, vitality, active_tech, 
+                profession, taels, item_id 
+            FROM users WHERE user_id=?
+        """, (target.id,)).fetchone()
 
         if not row:
             msg = "❌ Path not found. Use `!start` first."
             if is_interaction:
-                return await ctx_or_inter.response.send_message(msg, ephemeral=True)
+                if not ctx_or_inter.response.is_done():
+                    return await ctx_or_inter.response.send_message(msg, ephemeral=True)
+                return
             return await ctx_or_inter.send(msg)
 
+        # Unpack exactly 13 values
         u_id, bg, rank, stage, ki, mastery, last_ref, hp, vit, active_tech, profession, taels, item = row
+        
+        # Pass first 11 values for AFK logic
         new_ki, new_mastery, new_stage, new_hp, new_vit, now = self.process_afk_gains(row[:11])
         
-        c.execute("UPDATE users SET ki=?, mastery=?, stage=?, hp=?, vitality=?, last_refresh=? WHERE user_id=?", 
-                  (new_ki, round(new_mastery, 2), new_stage, new_hp, new_vit, now.isoformat(), target.id))
+        c.execute("""
+            UPDATE users SET ki=?, mastery=?, stage=?, hp=?, vitality=?, last_refresh=? 
+            WHERE user_id=?
+        """, (new_ki, round(new_mastery, 2), new_stage, new_hp, new_vit, now.isoformat(), target.id))
         conn.commit()
         
         embed = discord.Embed(title=f"📜 Status: {target.name}", color=0x700000)
