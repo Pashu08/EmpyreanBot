@@ -13,16 +13,17 @@ class PavilionView(discord.ui.View):
         self.member_id = member_id
         self.get_db = db_func
         
+        # Detailed Explanations for the Seeker
         self.techniques = {
-            "Flowing Cloud Steps": "💨 Focus: Dodge & Agility",
-            "Swift Wind Kick": "🦶 Focus: Damage & Speed",
-            "Golden Bell Shield": "🔔 Focus: Defense & Tanking",
-            "Vajra Guard Mantra": "🧘 Focus: Vitality Regeneration"
+            "Flowing Cloud Steps": "💨 **Focus:** Dodge & Agility\n*Mastery increases your natural chance to evade strikes in combat.*",
+            "Swift Wind Kick": "🦶 **Focus:** Damage & Speed\n*Mastery increases your total damage output and strike frequency.*",
+            "Golden Bell Shield": "🔔 **Focus:** Defense & Tanking\n*Mastery reduces the damage you take from physical blows significantly.*",
+            "Vajra Guard Mantra": "🧘 **Focus:** Vitality Regeneration\n*Mastery boosts your natural health and energy recovery rates.*"
         }
         self.create_buttons()
 
     def create_buttons(self):
-        for name, desc in self.techniques.items():
+        for name in self.techniques.keys():
             btn = discord.ui.Button(label=name, style=discord.ButtonStyle.primary, custom_id=name)
             btn.callback = self.select_tech
             self.add_item(btn)
@@ -41,7 +42,9 @@ class PavilionView(discord.ui.View):
         
         embed = discord.Embed(
             title="📜 Technique Bound",
-            description=f"You have begun studying **{tech_name}**.\n\n*Mastery:* **0.0%**\n*Goal:* Reach **50%** to attempt your first Breakthrough.",
+            description=f"You have begun studying **{tech_name}**.\n\n"
+                        f"{self.techniques[tech_name]}\n\n"
+                        f"*Mastery:* **0.0%**\n*Goal:* Reach **50%** to attempt your first Breakthrough.",
             color=0x00FF00
         )
         await interaction.response.edit_message(embed=embed, view=None)
@@ -62,15 +65,12 @@ class Mechanics(commands.Cog):
     # ==========================================
     @tasks.loop(minutes=10.0)
     async def heartbeat(self):
-        """Naturally restores HP and Vitality based on rank and current limits."""
         conn = self.get_db()
         c = conn.cursor()
-        
         users = c.execute("SELECT user_id, hp, vitality, rank FROM users").fetchall()
         
         for user in users:
             u_id, current_hp, current_vit, rank = user
-            
             if "Second-Rate" in rank: regen = 25
             elif "Third-Rate" in rank: regen = 15
             else: regen = 5
@@ -92,33 +92,52 @@ class Mechanics(commands.Cog):
         await self.bot.wait_until_ready()
 
     # ==========================================
-    # HYBRID COMMANDS (!pavilion or /pavilion)
+    # HYBRID COMMANDS (!pavilion)
     # ==========================================
     @commands.hybrid_command(name="pavilion", description="Enter the library to choose foundational techniques.")
     async def pavilion(self, ctx):
         conn = self.get_db()
         c = conn.cursor()
-        user = c.execute("SELECT rank, ki, active_tech FROM users WHERE user_id = ?", (ctx.author.id,)).fetchone()
+        user = c.execute("SELECT rank, ki, active_tech, mastery FROM users WHERE user_id = ?", (ctx.author.id,)).fetchone()
         conn.close()
 
         if not user:
-            return await ctx.send("❌ Use `/start` first.", ephemeral=True)
+            return await ctx.send("❌ Use `!start` first.", ephemeral=True)
 
-        rank, ki, active_tech = user
+        rank, ki, active_tech, mastery = user
 
-        if active_tech == "None":
-            if "Mortal" in rank and ki < 100:
-                return await ctx.send("❌ The scrolls are sealed. You need **100 Ki** to understand these foundations.", ephemeral=True)
-            
-            view = PavilionView(ctx, ctx.author.id, self.get_db)
+        # 1. Check if user meets the Ki requirement
+        if "Mortal" in rank and ki < 100:
+            return await ctx.send("❌ The scrolls are sealed. You need **100 Ki** to understand these foundations.", ephemeral=True)
+
+        # 2. Setup the descriptions for the display
+        pavilion_desc = "**The Library contains the following foundations:**\n\n"
+        pavilion_desc += "💨 **Flowing Cloud Steps**\n*Focus: Dodge & Agility*\n\n"
+        pavilion_desc += "🦶 **Swift Wind Kick**\n*Focus: Damage & Speed*\n\n"
+        pavilion_desc += "🔔 **Golden Bell Shield**\n*Focus: Defense & Tanking*\n\n"
+        pavilion_desc += "🧘 **Vajra Guard Mantra**\n*Focus: Vitality Regeneration*"
+
+        # 3. Logic for players who ALREADY have a technique
+        if active_tech != "None":
             embed = discord.Embed(
-                title="🏮 Pavilion of Hidden Scrolls",
-                description="The air is thick with the scent of old paper. Four foundational scrolls sit before you.\n\n**Choose your path wisely.**",
+                title="🏮 Pavilion: Current Focus",
+                description=f"You are currently focusing on **{active_tech}**.\n"
+                            f"**Current Mastery:** `{mastery}%` / 100%\n\n"
+                            f"*To switch techniques, you must complete your current study or reset your progress.*",
                 color=0x700000
             )
-            return await ctx.send(embed=embed, view=view)
+            embed.add_field(name="Available for Future Study", value=pavilion_desc)
+            return await ctx.send(embed=embed)
 
-        await ctx.send(f"🧘 You are currently focusing on **{active_tech}**. Master it before seeking another.", ephemeral=True)
+        # 4. Logic for players choosing for the first time
+        view = PavilionView(ctx, ctx.author.id, self.get_db)
+        embed = discord.Embed(
+            title="🏮 Pavilion of Hidden Scrolls",
+            description=f"The air is thick with the scent of old paper. Four foundational scrolls sit before you.\n\n{pavilion_desc}",
+            color=0x700000
+        )
+        embed.set_footer(text="Choose a path to begin your specialized training.")
+        await ctx.send(embed=embed, view=view)
 
     @commands.hybrid_command(name="meditate", description="Check natural recovery status")
     async def meditate_status(self, ctx):

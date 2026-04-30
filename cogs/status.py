@@ -15,8 +15,8 @@ class StatusView(discord.ui.View):
         self.get_db = get_db
 
     @discord.ui.button(label="🔄 Refresh", style=discord.ButtonStyle.gray)
-    async def refresh_button(self, interaction: discord.Interaction):
-        # FIXED: Defer immediately to prevent "Interaction Failed"
+    async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # FIXED: Added 'button' argument to stop the TypeError crash
         await interaction.response.defer()
         
         cog = self.bot.get_cog('Status')
@@ -24,7 +24,7 @@ class StatusView(discord.ui.View):
             await cog.stats(interaction, self.target)
 
 # ==========================================
-# CORE COG: STATUS & AFK ENGINE
+# CORE COG: STATUS, AFK ENGINE & INVENTORY
 # ==========================================
 class Status(commands.Cog):
     def __init__(self, bot):
@@ -40,7 +40,6 @@ class Status(commands.Cog):
 
     # --- AFK CALCULATION ENGINE ---
     def process_afk_gains(self, user_data):
-        # u_id, bg, rank, stage, ki, mastery, last_ref, hp, vit, active_tech, profession
         u_id, bg, rank, stage, ki, mastery, last_ref, hp, vit, active_tech, profession = user_data
         
         now = datetime.datetime.now()
@@ -50,8 +49,6 @@ class Status(commands.Cog):
         last_ref_dt = datetime.datetime.fromisoformat(last_ref)
         hours_passed = (now - last_ref_dt).total_seconds() / 3600
         
-        # BALANCE UPDATE: AFK is now 10 Ki/hr for Mortals.
-        # This makes it a slow trickle compared to the instant gains of !observe.
         rates = {
             "The Bound (Mortal)": 10,
             "Third-Rate Warrior": 25,
@@ -59,27 +56,21 @@ class Status(commands.Cog):
         }
         base_rate = rates.get(rank, 10)
         
-        # 1. AFK Ki Gains
         ki_gained = int(base_rate * hours_passed)
-        
-        # 2. Offline Mastery (Instructor Perk: +15%)
         mastery_mult = 1.15 if profession == "Instructor" else 1.0
         mastery_gained = (0.1 * hours_passed) * mastery_mult
         
-        # 3. Hermit Perk: Natural Spirit Recovery
         if bg == "Hermit":
             regen_mult = 0.05 * hours_passed
             hp += (hp * regen_mult)
             vit += (vit * regen_mult)
 
-        # Caps logic
         caps = {"The Bound (Mortal)": 100, "Third-Rate Warrior": 1000, "Second-Rate Warrior": 3000}
         ki_cap = caps.get(rank, 7500)
 
         new_ki = min(ki_cap, ki + ki_gained)
         new_mastery = min(100.0, mastery + mastery_gained)
 
-        # 4. Stage Progression Logic
         quarter = ki_cap / 4
         if new_ki >= ki_cap: new_stage = "Peak"
         elif new_ki >= quarter * 3: new_stage = "Late"
@@ -89,7 +80,7 @@ class Status(commands.Cog):
         return new_ki, new_mastery, new_stage, hp, vit, now
 
     # ==========================================
-    # HYBRID COMMAND: /stats or !stats
+    # HYBRID COMMAND: !stats
     # ==========================================
     @commands.hybrid_command(name="stats", description="View progress and claim AFK gains.")
     async def stats(self, ctx_or_inter, member: discord.Member = None):
@@ -106,28 +97,22 @@ class Status(commands.Cog):
         """, (target.id,)).fetchone()
 
         if not row:
-            msg = "❌ Path not found. Use `/start` first."
+            msg = "❌ Path not found. Use `!start` first."
             if is_interaction:
-                # If it's a button click from a non-existent user (shouldn't happen)
                 if not ctx_or_inter.response.is_done():
                     return await ctx_or_inter.response.send_message(msg, ephemeral=True)
                 return
             return await ctx_or_inter.send(msg)
 
-        # Unpacking data
         u_id, bg, rank, stage, ki, mastery, last_ref, hp, vit, active_tech, profession, taels, item = row
-
-        # Calculate AFK Gains
         new_ki, new_mastery, new_stage, new_hp, new_vit, now = self.process_afk_gains(row[:11])
         
-        # Update Database
         c.execute("""
             UPDATE users SET ki=?, mastery=?, stage=?, hp=?, vitality=?, last_refresh=? 
             WHERE user_id=?
         """, (new_ki, round(new_mastery, 2), new_stage, new_hp, new_vit, now.isoformat(), target.id))
         conn.commit()
         
-        # --- BUILDING THE VISUAL EMBED ---
         embed = discord.Embed(title=f"📜 Status: {target.name}", color=0x700000)
         embed.set_thumbnail(url=target.display_avatar.url)
         
@@ -143,19 +128,47 @@ class Status(commands.Cog):
         tech_val = f"📜 {active_tech}" if active_tech != "None" else "No technique selected."
         embed.add_field(name="Current Study", value=tech_val, inline=False)
         
-        embed.add_field(name="Inventory", value=f"💰 **Taels:** {taels}\n📦 **Soul Item:** {item}", inline=False)
-        
+        # INVENTORY REMOVED FROM HERE AS REQUESTED
         embed.set_footer(text=f"Last Sync: {now.strftime('%H:%M:%S')}")
         
         view = StatusView(self.bot, target, self.get_db) if target.id == author.id else None
         
         if is_interaction:
-            # We already deferred, so we edit the response
             await ctx_or_inter.edit_original_response(embed=embed, view=view)
         else:
             await ctx_or_inter.send(embed=embed, view=view)
-            
         conn.close()
+
+    # ==========================================
+    # NEW HYBRID COMMAND: !inventory
+    # ==========================================
+    @commands.hybrid_command(name="inventory", description="View your currency and stored items.")
+    async def inventory(self, ctx):
+        conn = self.get_db()
+        c = conn.cursor()
+        
+        row = c.execute("SELECT taels, item_id FROM users WHERE user_id=?", (ctx.author.id,)).fetchone()
+        conn.close()
+
+        if not row:
+            return await ctx.send("❌ You haven't started your journey yet.", ephemeral=True)
+
+        taels, item_string = row
+        
+        # Format the item list
+        if not item_string or item_string == "None":
+            items_display = "*Your pockets are empty.*"
+        else:
+            # Splits the comma-separated string into a bulleted list
+            items_display = "\n".join([f"• {i.strip()}" for i in item_string.split(",")])
+
+        embed = discord.Embed(title=f"🎒 Inventory: {ctx.author.name}", color=0x2c3e50)
+        embed.set_thumbnail(url=ctx.author.display_avatar.url)
+        
+        embed.add_field(name="Wealth", value=f"💰 **Taels:** {taels}", inline=False)
+        embed.add_field(name="Possessions", value=items_display, inline=False)
+        
+        await ctx.send(embed=embed)
 
 async def setup(bot):
     await bot.add_cog(Status(bot))

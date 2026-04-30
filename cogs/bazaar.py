@@ -7,24 +7,22 @@ class BazaarView(discord.ui.View):
     def __init__(self, ctx, user_data, db_func):
         super().__init__(timeout=60)
         self.ctx = ctx
-        # Correctly getting user ID whether it's Context or Interaction
         self.user_id = ctx.user.id if isinstance(ctx, discord.Interaction) else ctx.author.id
         self.get_db = db_func
-        self.background = user_data[1] # Background from DB
-        self.taels = user_data[9]      # Taels from DB
+        self.background = user_data[1] 
         
-        # Define the Shop Categories
+        # FIXED: Specifically targeting the Taels column to avoid the "Initial" text bug
+        self.current_taels = user_data[11]      
+        
         self.add_item(ShopDropdown(self.background))
 
 class ShopDropdown(discord.ui.Select):
     def __init__(self, background):
         options = [
             discord.SelectOption(label="Apothecary", description="Pills and Medicines", emoji="💊"),
-            discord.SelectOption(label="Scroll Merchant", description="Technique Manuals", emoji="📜"),
             discord.SelectOption(label="Provisioner", description="Food and Recovery", emoji="🍱")
         ]
         
-        # THE OUTCAST STEALTH LOGIC
         if background == "Outcast":
             options.append(discord.SelectOption(label="Shady Dealer", description="Forbidden Goods", emoji="👺"))
             
@@ -34,35 +32,32 @@ class ShopDropdown(discord.ui.Select):
         selection = self.values[0]
         view: BazaarView = self.view
         
-        # Content for each shop
         shops = {
             "Apothecary": [
                 ("Qi Condensing Pill", 100, "Restores 20 Ki instantly."),
                 ("Vitality Elixir", 150, "Restores 50% Max Vitality.")
-            ],
-            "Scroll Merchant": [
-                ("Mid-Tier: Iron Palm", 500, "Manual for advanced physical strikes."),
-                ("Mid-Tier: Swift Step", 500, "Manual for advanced movement.")
             ],
             "Provisioner": [
                 ("Herbal Soup", 30, "Minor Vitality recovery."),
                 ("Dried Rations", 10, "Cheap endurance food.")
             ],
             "Shady Dealer": [
-                ("Demonic Essence", 1000, "Huge Ki gain, but costs 50 HP."),
-                ("Forbidden: Blood Blade", 2000, "A dangerous high-tier manual.")
+                ("Demonic Essence", 1000, "Huge Ki gain, but costs 50 HP.")
             ]
         }
 
         items = shops.get(selection, [])
-        embed = discord.Embed(title=f"🏪 Bazaar: {selection}", color=0x700000)
+        # Displaying the actual numerical Taels
+        embed = discord.Embed(
+            title=f"🏪 Bazaar: {selection}", 
+            description=f"💰 Your Taels: **{view.current_taels}**",
+            color=0x700000
+        )
         
-        # Clear existing item dropdowns if user switches categories
         for item in view.children[:]:
             if isinstance(item, ItemSelect):
                 view.remove_item(item)
 
-        # Add the Item Selection dropdown
         view.add_item(ItemSelect(items, view.get_db))
 
         for name, price, desc in items:
@@ -70,7 +65,6 @@ class ShopDropdown(discord.ui.Select):
             
         await interaction.response.edit_message(embed=embed, view=view)
 
-# --- NEW: ITEM SELECTION & PURCHASE LOGIC ---
 class ItemSelect(discord.ui.Select):
     def __init__(self, items, db_func):
         self.get_db = db_func
@@ -84,11 +78,12 @@ class ItemSelect(discord.ui.Select):
         item_name, item_price = self.values[0].split("|")
         item_price = int(item_price)
         user_id = interaction.user.id
+        view: BazaarView = self.view
         
         conn = self.get_db()
         c = conn.cursor()
         
-        # Fetch money and inventory
+        # We query specifically for Taels and Items to be 100% sure we have numbers
         user = c.execute("SELECT taels, item_id FROM users WHERE user_id=?", (user_id,)).fetchone()
         
         if not user:
@@ -96,23 +91,27 @@ class ItemSelect(discord.ui.Select):
             
         current_taels, current_inv = user
 
-        # 1. Check Funds
         if current_taels < item_price:
-            return await interaction.response.send_message(f"❌ You need {item_price} Taels (Current: {current_taels})", ephemeral=True)
+            return await interaction.response.send_message(f"❌ You need {item_price} Taels (You have {current_taels}).", ephemeral=True)
 
-        # 2. Check Ownership (Don't buy the same manual twice)
-        if current_inv and item_name in current_inv:
-            return await interaction.response.send_message("❌ You already own this item.", ephemeral=True)
-
-        # 3. Complete Transaction
         new_taels = current_taels - item_price
-        new_inv = f"{current_inv}, {item_name}" if current_inv != "None" else item_name
+        new_inv = f"{current_inv}, {item_name}" if current_inv and current_inv != "None" else item_name
         
         c.execute("UPDATE users SET taels = ?, item_id = ? WHERE user_id = ?", (new_taels, new_inv, user_id))
         conn.commit()
         conn.close()
 
-        await interaction.response.send_message(f"✅ Purchased **{item_name}**! (-{item_price} Taels)", ephemeral=True)
+        # Update the live view so the next stall you click also shows the right amount
+        view.current_taels = new_taels
+        
+        # Update the text on the current screen
+        main_embed = interaction.message.embeds[0]
+        main_embed.description = f"💰 Your Taels: **{new_taels}**"
+        
+        self.placeholder = f"✅ Bought {item_name}!"
+        
+        await interaction.response.edit_message(embed=main_embed, view=view)
+        await interaction.followup.send(f"🛍️ You bought **{item_name}** for {item_price} Taels!", ephemeral=True)
 
 class Bazaar(commands.Cog):
     def __init__(self, bot):
@@ -121,24 +120,24 @@ class Bazaar(commands.Cog):
     def get_db(self):
         return sqlite3.connect('murim.db')
 
-    # UPDATED: Changed to hybrid_command to support !bazaar
-    @commands.hybrid_command(name="bazaar", description="Visit the marketplace to spend your Taels.")
+    @commands.hybrid_command(name="bazaar", description="Visit the marketplace.")
     async def bazaar(self, ctx):
         conn = self.get_db()
         c = conn.cursor()
+        # Fetching all columns for the specific user
         user_data = c.execute("SELECT * FROM users WHERE user_id = ?", (ctx.author.id,)).fetchone()
         conn.close()
 
         if not user_data:
             return await ctx.send("❌ You are not registered.", ephemeral=True)
 
+        # user_data[11] is the Taels column in your DB
         embed = discord.Embed(
             title="🏮 The Great Bazaar",
-            description=f"Your Taels: **{user_data[9]}**\n\nWelcome to the market. Select a stall below to browse goods.",
+            description=f"💰 Your Taels: **{user_data[11]}**\n\nWelcome to the market. Select a stall below.",
             color=0x700000
         )
         
-        # ctx handles both prefix and slash inputs
         view = BazaarView(ctx, user_data, self.get_db)
         await ctx.send(embed=embed, view=view)
 
