@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 import sqlite3
 import asyncio
+import datetime
 
 PERMANENT_GOD = 756012403291848804 
 temporary_gods = set() 
@@ -48,6 +49,8 @@ class Admin(commands.Cog):
             "`!setki <num> @user` - Set Ki levels\n"
             "`!settaels <num> @user` - Set Tael amount\n"
             "`!setmastery <num> @user` - Set Technique Mastery\n"
+            "`!setcombat <num> @user` - Set Combat Mastery\n"
+            "`!fixmeridians @user` - Instant Heal Debuff\n"
             "`!refill @user` - Full HP/Vit restoration\n"
             "`!reset @user` - Erase a player"
         )
@@ -80,7 +83,6 @@ class Admin(commands.Cog):
 
     @commands.command()
     async def demote(self, ctx, member: discord.Member):
-        """Removes a user from the temporary gods list."""
         if ctx.author.id != PERMANENT_GOD: return
         await ctx.message.delete()
         if member.id in temporary_gods:
@@ -100,6 +102,9 @@ class Admin(commands.Cog):
         conn.close()
         await ctx.send(f"♻️ **Divine Reset:** {target.name} erased from history.", delete_after=5)
 
+    # ==========================================
+    # STAT OVERRIDES
+    # ==========================================
     @commands.command()
     async def setki(self, ctx, amount: int, member: discord.Member = None):
         if not self.is_admin(ctx.author.id): return
@@ -111,9 +116,6 @@ class Admin(commands.Cog):
         conn.close()
         await ctx.send(f"🪄 Ki set to {amount} for {target.name}.", delete_after=5)
 
-    # ==========================================
-    # NEW: TAEL & MASTERY CONTROL
-    # ==========================================
     @commands.command()
     async def settaels(self, ctx, amount: int, member: discord.Member = None):
         if not self.is_admin(ctx.author.id): return
@@ -135,6 +137,30 @@ class Admin(commands.Cog):
         conn.commit()
         conn.close()
         await ctx.send(f"📖 Mastery set to {amount}% for {target.name}.", delete_after=5)
+
+    @commands.command()
+    async def setcombat(self, ctx, amount: float, member: discord.Member = None):
+        """Sets the player's Combat Mastery levels."""
+        if not self.is_admin(ctx.author.id): return
+        await ctx.message.delete()
+        target = member or ctx.author
+        conn = self.get_db()
+        conn.execute("UPDATE users SET combat_mastery = ? WHERE user_id = ?", (amount, target.id))
+        conn.commit()
+        conn.close()
+        await ctx.send(f"⚔️ Combat Mastery set to {amount} for {target.name}.", delete_after=5)
+
+    @commands.command()
+    async def fixmeridians(self, ctx, member: discord.Member = None):
+        """Instantly heals the Damaged Meridians debuff."""
+        if not self.is_admin(ctx.author.id): return
+        await ctx.message.delete()
+        target = member or ctx.author
+        conn = self.get_db()
+        conn.execute("UPDATE users SET meridian_damage = NULL WHERE user_id = ?", (target.id,))
+        conn.commit()
+        conn.close()
+        await ctx.send(f"✨ **Heavenly Mend:** {target.name}'s meridians have been restored.", delete_after=5)
 
     # ==========================================
     # REFILL: Updated for Dynamic Scaling

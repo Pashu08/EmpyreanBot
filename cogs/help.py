@@ -55,6 +55,7 @@ class HelpSelect(discord.ui.Select):
             embed.title = "🏮 Life in the Realms"
             embed.description = (
                 "**`!work`** — Labor to earn Taels (Costs Vitality).\n"
+                "**`!recover`** — Enter **Deep Meditation** to restore **25 Vitality** (60s wait).\n"
                 "**`!meditate`** — Check time until natural HP/Vitality recovery.\n"
                 "**`!bazaar`** — Visit the Apothecary, Provisioner, or Shady Dealer.\n"
                 "**`!pchoose`** — Select your life-path profession (e.g., Alchemist)."
