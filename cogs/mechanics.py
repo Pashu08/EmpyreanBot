@@ -25,7 +25,6 @@ class PavilionSelect(discord.ui.Select):
         view: PavilionView = self.view
         view.selected_tech = selection
 
-        # Story & Effect Descriptions
         details = {
             "Flowing Cloud Steps": {
                 "story": "The ink on this scroll drifts like mist. It depicts a master walking through a rainstorm without a single drop touching his robes.",
@@ -57,7 +56,6 @@ class PavilionSelect(discord.ui.Select):
         )
         embed.set_footer(text="If this path calls to you, click 'Begin Training' below.")
         
-        # Enable the Confirm Button now that they've looked at one
         view.confirm_btn.disabled = False
         await interaction.response.edit_message(embed=embed, view=view)
 
@@ -69,10 +67,8 @@ class PavilionView(discord.ui.View):
         self.get_db = db_func
         self.selected_tech = None
 
-        # Add the dropdown
         self.add_item(PavilionSelect(member_id))
         
-        # Add the Confirm Button (Starts Disabled)
         self.confirm_btn = discord.ui.Button(label="Begin Training", style=discord.ButtonStyle.success, disabled=True)
         self.confirm_btn.callback = self.confirm_selection
         self.add_item(self.confirm_btn)
@@ -95,6 +91,9 @@ class PavilionView(discord.ui.View):
 class Mechanics(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        # Track active meditation and cooldowns
+        self.meditating = set()
+        self.cooldowns = {}
         self.heartbeat.start()
 
     def cog_unload(self):
@@ -104,7 +103,7 @@ class Mechanics(commands.Cog):
         return sqlite3.connect('murim.db')
 
     # ==========================================
-    # HEARTBEAT LOOP (Automatic Recovery)
+    # BUFFED HEARTBEAT LOOP (Automatic Recovery)
     # ==========================================
     @tasks.loop(minutes=10.0)
     async def heartbeat(self):
@@ -114,9 +113,10 @@ class Mechanics(commands.Cog):
         
         for user in users:
             u_id, current_hp, current_vit, rank = user
-            if "Second-Rate" in rank: regen = 25
-            elif "Third-Rate" in rank: regen = 15
-            else: regen = 5
+            # BUFFED RATES: Players can actually play now
+            if "Second-Rate" in rank: regen = 100
+            elif "Third-Rate" in rank: regen = 50
+            else: regen = 25 # Mortal now gets 25% back every 10m
             
             caps = {"The Bound (Mortal)": 100, "Third-Rate Warrior": 300, "Second-Rate Warrior": 600}
             limit = caps.get(rank, 1000)
@@ -135,10 +135,59 @@ class Mechanics(commands.Cog):
         await self.bot.wait_until_ready()
 
     # ==========================================
+    # ACTIVE RECOVERY (Lotus Meditation)
+    # ==========================================
+    @commands.hybrid_command(name="recover", description="Active meditation: Restore 25 Vit in 60s.")
+    async def recover(self, ctx):
+        user_id = ctx.author.id
+        now = datetime.datetime.now()
+
+        # 1. Check Cooldown (5 Minutes)
+        if user_id in self.cooldowns:
+            if now < self.cooldowns[user_id]:
+                diff = self.cooldowns[user_id] - now
+                return await ctx.send(f"❌ Your soul is still stabilizing. Wait **{int(diff.total_seconds())}s** before meditating again.", ephemeral=True)
+
+        if user_id in self.meditating:
+            return await ctx.send("🧘 You are already in deep meditation.", ephemeral=True)
+
+        self.meditating.add(user_id)
+        # Lockout shared with bot for other cogs
+        if not hasattr(self.bot, 'is_meditating'): self.bot.is_meditating = set()
+        self.bot.is_meditating.add(user_id)
+
+        await ctx.send("🧘 You enter a state of deep meditation. Your senses dull as your Ki stabilizes... (Wait: 60s)")
+        
+        await asyncio.sleep(60)
+        
+        # 2. Update Database
+        conn = self.get_db()
+        c = conn.cursor()
+        # Cap logic: Find player rank to check limits
+        res = c.execute("SELECT rank FROM users WHERE user_id = ?", (user_id,)).fetchone()
+        caps = {"The Bound (Mortal)": 100, "Third-Rate Warrior": 300, "Second-Rate Warrior": 600}
+        limit = caps.get(res[0], 1000) if res else 100
+        
+        c.execute("UPDATE users SET vitality = MIN(vitality + 25, ?) WHERE user_id = ?", (limit, user_id))
+        conn.commit()
+        conn.close()
+
+        # 3. Set Cooldown & Cleanup
+        self.meditating.remove(user_id)
+        self.bot.is_meditating.remove(user_id)
+        self.cooldowns[user_id] = now + datetime.timedelta(minutes=5)
+        
+        await ctx.send(f"✨ {ctx.author.mention}, you open your eyes as refreshing energy flows through your meridians! (+25 Vitality)")
+
+    # ==========================================
     # HYBRID COMMANDS (!pavilion)
     # ==========================================
-    @commands.hybrid_command(name="pavilion", description="Enter the library to choose foundational techniques.")
+    @commands.hybrid_command(name="pavilion")
     async def pavilion(self, ctx):
+        # Meditating check
+        if hasattr(self.bot, 'is_meditating') and ctx.author.id in self.bot.is_meditating:
+            return await ctx.send("❌ You cannot enter the Pavilion while in deep meditation!", ephemeral=True)
+
         conn = self.get_db()
         c = conn.cursor()
         user = c.execute("SELECT rank, ki, active_tech, mastery FROM users WHERE user_id = ?", (ctx.author.id,)).fetchone()
@@ -148,7 +197,6 @@ class Mechanics(commands.Cog):
             return await ctx.send("❌ Use `!start` first.", ephemeral=True)
 
         rank, ki, active_tech, mastery = user
-
         if "Mortal" in rank and ki < 100:
             return await ctx.send("❌ The scrolls are sealed. You need **100 Ki** to understand these foundations.", ephemeral=True)
 

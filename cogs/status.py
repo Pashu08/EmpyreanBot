@@ -40,24 +40,35 @@ class Status(commands.Cog):
         u_id, bg, rank, stage, ki, mastery, last_ref, hp, vit, active_tech, profession = user_data
         now = datetime.datetime.now()
         if not last_ref: return ki, mastery, stage, hp, vit, now
+        
         last_ref_dt = datetime.datetime.fromisoformat(last_ref)
         hours_passed = (now - last_ref_dt).total_seconds() / 3600
         
-        rates = {"The Bound (Mortal)": 10, "Third-Rate Warrior": 25, "Second-Rate Warrior": 60}
-        base_rate = rates.get(rank, 10)
+        # --- BUFFED AFK RATES (Matching Mechanics.py) ---
+        # Converting the 10-minute heartbeat rates to hourly rates
+        # Mortal: 25/10min = 150/hour | Third-Rate: 50/10min = 300/hour
+        rates = {"The Bound (Mortal)": 150, "Third-Rate Warrior": 300, "Second-Rate Warrior": 600}
+        base_rate = rates.get(rank, 150)
+        
         ki_gained = int(base_rate * hours_passed)
         mastery_mult = 1.15 if profession == "Instructor" else 1.0
-        mastery_gained = (0.1 * hours_passed) * mastery_mult
+        mastery_gained = (0.5 * hours_passed) * mastery_mult # Buffed mastery gain too
         
         if bg == "Hermit":
-            regen_mult = 0.05 * hours_passed
+            regen_mult = 0.15 * hours_passed # Buffed Hermit regen
             hp += (hp * regen_mult)
             vit += (vit * regen_mult)
 
         caps = {"The Bound (Mortal)": 100, "Third-Rate Warrior": 1000, "Second-Rate Warrior": 3000}
+        vit_caps = {"The Bound (Mortal)": 100, "Third-Rate Warrior": 300, "Second-Rate Warrior": 600}
+        
         ki_cap = caps.get(rank, 7500)
+        vit_cap = vit_caps.get(rank, 1000)
+        
         new_ki = min(ki_cap, ki + ki_gained)
         new_mastery = min(100.0, mastery + mastery_gained)
+        new_hp = min(vit_cap, hp + (base_rate * hours_passed))
+        new_vit = min(vit_cap, vit + (base_rate * hours_passed))
 
         quarter = ki_cap / 4
         if new_ki >= ki_cap: new_stage = "Peak"
@@ -65,7 +76,7 @@ class Status(commands.Cog):
         elif new_ki >= quarter * 2: new_stage = "Middle"
         else: new_stage = "Initial"
 
-        return new_ki, new_mastery, new_stage, hp, vit, now
+        return new_ki, new_mastery, new_stage, new_hp, new_vit, now
 
     @commands.hybrid_command(name="stats", description="View progress and claim AFK gains.")
     async def stats(self, ctx_or_inter, member: discord.Member = None):
@@ -76,7 +87,6 @@ class Status(commands.Cog):
         conn = self.get_db()
         c = conn.cursor()
         
-        # UPDATED: Explicitly selecting 15 columns including combat stats
         row = c.execute("""
             SELECT 
                 user_id, background, rank, stage, ki, 
@@ -93,10 +103,7 @@ class Status(commands.Cog):
                 return
             return await ctx_or_inter.send(msg)
 
-        # Unpack exactly 15 values
         u_id, bg, rank, stage, ki, mastery, last_ref, hp, vit, active_tech, profession, taels, item, c_mastery, m_damage = row
-        
-        # Pass first 11 values for AFK logic
         new_ki, new_mastery, new_stage, new_hp, new_vit, now = self.process_afk_gains(row[:11])
         
         c.execute("""
@@ -109,10 +116,8 @@ class Status(commands.Cog):
         embed.set_thumbnail(url=target.display_avatar.url)
         bg_emoji = "🌿" if bg == "Hermit" else "⚒️" if bg == "Laborer" else "🌑"
         
-        # IDENTITY
         embed.add_field(name="Identity", value=f"**Realm:** {rank}\n**Stage:** {new_stage}\n**Path:** {bg_emoji} {bg}", inline=False)
         
-        # VITAL STATISTICS (Including Meridian Status)
         meridian_status = "✅ Healthy"
         if m_damage:
             try:
@@ -120,12 +125,10 @@ class Status(commands.Cog):
                 if datetime.datetime.now() < m_dt:
                     diff = m_dt - datetime.datetime.now()
                     meridian_status = f"⚠️ Damaged ({int(diff.total_seconds() // 60)}m left)"
-            except:
-                pass
+            except: pass
                 
         embed.add_field(name="Vital Statistics", value=f"🩸 **HP:** {int(new_hp)}\n❤️ **Vit:** {int(new_vit)}\n🧠 **Meridians:** {meridian_status}", inline=True)
         
-        # CULTIVATION & COMBAT
         m_bar = self.progress_bar(new_mastery)
         embed.add_field(name="Cultivation", value=f"✨ **Ki:** {new_ki}\n📖 **Mastery:** {round(new_mastery, 2)}%\n⚔️ **Combat Mastery:** {c_mastery}\n{m_bar}", inline=True)
         
