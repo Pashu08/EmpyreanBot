@@ -11,7 +11,7 @@ class BazaarView(discord.ui.View):
         self.get_db = db_func
         self.background = user_data[1] 
         
-        # Pulling Taels from index 11 to avoid the "Initial" bug
+        # FIXED: Using index 11 from the explicit SELECT statement
         self.current_taels = user_data[11]      
         
         self.add_item(ShopDropdown(self.background))
@@ -32,7 +32,6 @@ class ShopDropdown(discord.ui.Select):
         selection = self.values[0]
         view: BazaarView = self.view
         
-        # UPDATED: Using proper Murim names to match Items.py effects
         shops = {
             "Apothecary": [
                 ("Spirit Gathering Dan", 100, "Refines the soul. Restores 20 Ki."),
@@ -94,14 +93,12 @@ class ItemSelect(discord.ui.Select):
             return await interaction.response.send_message(f"❌ You need {item_price} Taels (You have {current_taels}).", ephemeral=True)
 
         new_taels = current_taels - item_price
-        # Correctly handles 'None' or empty inventory strings
         new_inv = f"{current_inv}, {item_name}" if current_inv and current_inv != "None" else item_name
         
         c.execute("UPDATE users SET taels = ?, item_id = ? WHERE user_id = ?", (new_taels, new_inv, user_id))
         conn.commit()
         conn.close()
 
-        # Update view data and main embed display
         view.current_taels = new_taels
         main_embed = interaction.message.embeds[0]
         main_embed.description = f"💰 Your Taels: **{new_taels}**"
@@ -122,7 +119,14 @@ class Bazaar(commands.Cog):
     async def bazaar(self, ctx):
         conn = self.get_db()
         c = conn.cursor()
-        user_data = c.execute("SELECT * FROM users WHERE user_id = ?", (ctx.author.id,)).fetchone()
+        # FIXED: Explicitly selecting columns to ensure Taels are at index 11
+        user_data = c.execute("""
+            SELECT 
+                user_id, background, rank, stage, ki, 
+                mastery, last_refresh, hp, vitality, active_tech, 
+                profession, taels, item_id 
+            FROM users WHERE user_id = ?
+        """, (ctx.author.id,)).fetchone()
         conn.close()
 
         if not user_data:

@@ -34,10 +34,9 @@ class Status(commands.Cog):
     def progress_bar(self, current, total=100, segments=10):
         ratio = max(0, min(current / total, 1))
         filled = int(ratio * segments)
-        return "🟥" * filled + "⬛" * (segments - filled)
+        return "🟦" * filled + "⬜" * (segments - filled)
 
     def process_afk_gains(self, user_data):
-        # u_id, bg, rank, stage, ki, mastery, last_ref, hp, vit, active_tech, profession
         u_id, bg, rank, stage, ki, mastery, last_ref, hp, vit, active_tech, profession = user_data
         now = datetime.datetime.now()
         if not last_ref: return ki, mastery, stage, hp, vit, now
@@ -77,12 +76,12 @@ class Status(commands.Cog):
         conn = self.get_db()
         c = conn.cursor()
         
-        # FIXED: Explicitly selecting 13 columns to prevent "Too many values to unpack"
+        # UPDATED: Explicitly selecting 15 columns including combat stats
         row = c.execute("""
             SELECT 
                 user_id, background, rank, stage, ki, 
                 mastery, last_refresh, hp, vitality, active_tech, 
-                profession, taels, item_id 
+                profession, taels, item_id, combat_mastery, meridian_damage
             FROM users WHERE user_id=?
         """, (target.id,)).fetchone()
 
@@ -94,8 +93,8 @@ class Status(commands.Cog):
                 return
             return await ctx_or_inter.send(msg)
 
-        # Unpack exactly 13 values
-        u_id, bg, rank, stage, ki, mastery, last_ref, hp, vit, active_tech, profession, taels, item = row
+        # Unpack exactly 15 values
+        u_id, bg, rank, stage, ki, mastery, last_ref, hp, vit, active_tech, profession, taels, item, c_mastery, m_damage = row
         
         # Pass first 11 values for AFK logic
         new_ki, new_mastery, new_stage, new_hp, new_vit, now = self.process_afk_gains(row[:11])
@@ -110,11 +109,25 @@ class Status(commands.Cog):
         embed.set_thumbnail(url=target.display_avatar.url)
         bg_emoji = "🌿" if bg == "Hermit" else "⚒️" if bg == "Laborer" else "🌑"
         
+        # IDENTITY
         embed.add_field(name="Identity", value=f"**Realm:** {rank}\n**Stage:** {new_stage}\n**Path:** {bg_emoji} {bg}", inline=False)
-        embed.add_field(name="Vital Statistics", value=f"🩸 **HP:** {int(new_hp)}\n❤️ **Vit:** {int(new_vit)}", inline=True)
         
+        # VITAL STATISTICS (Including Meridian Status)
+        meridian_status = "✅ Healthy"
+        if m_damage:
+            try:
+                m_dt = datetime.datetime.fromisoformat(m_damage)
+                if datetime.datetime.now() < m_dt:
+                    diff = m_dt - datetime.datetime.now()
+                    meridian_status = f"⚠️ Damaged ({int(diff.total_seconds() // 60)}m left)"
+            except:
+                pass
+                
+        embed.add_field(name="Vital Statistics", value=f"🩸 **HP:** {int(new_hp)}\n❤️ **Vit:** {int(new_vit)}\n🧠 **Meridians:** {meridian_status}", inline=True)
+        
+        # CULTIVATION & COMBAT
         m_bar = self.progress_bar(new_mastery)
-        embed.add_field(name="Cultivation", value=f"✨ **Ki:** {new_ki}\n📖 **Mastery:** {round(new_mastery, 2)}%\n{m_bar}", inline=True)
+        embed.add_field(name="Cultivation", value=f"✨ **Ki:** {new_ki}\n📖 **Mastery:** {round(new_mastery, 2)}%\n⚔️ **Combat Mastery:** {c_mastery}\n{m_bar}", inline=True)
         
         tech_val = f"📜 {active_tech}" if active_tech != "None" else "No technique selected."
         embed.add_field(name="Current Study", value=tech_val, inline=False)

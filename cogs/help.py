@@ -9,9 +9,9 @@ class HelpSelect(discord.ui.Select):
         options = [
             discord.SelectOption(label="Genesis & Basics", description="Start your journey & core stats.", emoji="🏁"),
             discord.SelectOption(label="Cultivation & Training", description="Ki, Mastery, and breakthroughs.", emoji="🌀"),
+            discord.SelectOption(label="Combat & Warfare", description="Hunting and battle mechanics.", emoji="⚔️"),
             discord.SelectOption(label="Inventory & Items", description="Manage your treasures and pills.", emoji="🎒"),
-            discord.SelectOption(label="Daily Actions", description="Working, meditating, and recovery.", emoji="⚒️"),
-            discord.SelectOption(label="The Marketplace", description="Buying spiritual goods.", emoji="🏮")
+            discord.SelectOption(label="Daily Actions & Shops", description="Work, recovery, and the Bazaar.", emoji="🏮")
         ]
         super().__init__(placeholder="Choose a category to study...", min_values=1, max_values=1, options=options)
 
@@ -25,7 +25,7 @@ class HelpSelect(discord.ui.Select):
             embed.title = "🏁 The Beginning"
             embed.description = (
                 "**`!start`** — Begin your journey and choose a background.\n"
-                "**`!stats`** — View your Rank, Ki, Mastery, and Stage.\n"
+                "**`!stats`** — View your Rank, Ki, Mastery, and **Meridian Health**.\n"
                 "**`!pstatus`** — View your professional rank and progress."
             )
         elif self.values[0] == "Cultivation & Training":
@@ -36,27 +36,28 @@ class HelpSelect(discord.ui.Select):
                 "**`!pavilion`** — Visit the library to choose or view your active technique.\n"
                 "**`!breakthrough`** — Attempt to reach the next Major Realm at 100% Ki."
             )
+        elif self.values[0] == "Combat & Warfare":
+            embed.title = "⚔️ Martial Conflict"
+            embed.description = (
+                "**`!hunt`** — Track down spirit beasts for Taels and Combat Mastery.\n"
+                "🔹 **Strike:** Basic attack (No Ki cost).\n"
+                "🔹 **Technique:** Use your bound scroll skill (Costs Ki).\n"
+                "⚠️ **Note:** Defeat results in a 10% Tael loss and **Damaged Meridians**."
+            )
         elif self.values[0] == "Inventory & Items":
             embed.title = "🎒 Treasures & Alchemy"
             embed.description = (
                 "**`!inventory`** — View your Taels and all stored items.\n"
                 "**`!use <item_name>`** — Consume a pill, soup, or elixir from your bag.\n\n"
-                "🔹 *Example: `!use Spirit Gathering Dan`*"
+                "🔹 *Example: `!use Jade Marrow Dew`*"
             )
-        elif self.values[0] == "Daily Actions":
-            embed.title = "⚒️ Training & Recovery"
+        elif self.values[0] == "Daily Actions & Shops":
+            embed.title = "🏮 Life in the Realms"
             embed.description = (
                 "**`!work`** — Labor to earn Taels (Costs Vitality).\n"
                 "**`!meditate`** — Check time until natural HP/Vitality recovery.\n"
+                "**`!bazaar`** — Visit the Apothecary, Provisioner, or Shady Dealer.\n"
                 "**`!pchoose`** — Select your life-path profession (e.g., Alchemist)."
-            )
-        elif self.values[0] == "The Marketplace":
-            embed.title = "🏮 The Great Bazaar"
-            embed.description = (
-                "**`!bazaar`** — Access the marketplace stalls.\n"
-                "🔹 **Apothecary:** Spiritual Dans and Elixirs.\n"
-                "🔹 **Provisioner:** Restorative Soups and Rations.\n"
-                "🌑 **Shady Dealer:** Dangerous goods for the Outcast."
             )
 
         embed.set_footer(text="The heavens watch every step you take.")

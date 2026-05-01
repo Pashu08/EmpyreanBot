@@ -5,55 +5,59 @@ import config
 import os
 
 # ==========================================
-# DATABASE INITIALIZATION & AUTO-MIGRATION
+# DATABASE: SELF-HEALING AUTO-MIGRATION
 # ==========================================
 def init_db():
     conn = sqlite3.connect('murim.db')
     c = conn.cursor()
     
-    c.execute('''CREATE TABLE IF NOT EXISTS users (
-                    user_id INTEGER PRIMARY KEY,
-                    background TEXT,
-                    rank_id INTEGER DEFAULT 0,
-                    rank TEXT DEFAULT 'The Bound (Mortal)',
-                    item_id TEXT,
-                    taels INTEGER DEFAULT 0,
-                    ki INTEGER DEFAULT 0,
-                    vitality INTEGER DEFAULT 100,
-                    hp INTEGER DEFAULT 100,
-                    stage TEXT DEFAULT 'Initial',
-                    last_refresh TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    mastery REAL DEFAULT 0.0,
-                    active_tech TEXT DEFAULT 'None',
-                    boss_flags TEXT DEFAULT '',
-                    profession TEXT DEFAULT 'None',
-                    prof_rank TEXT DEFAULT 'Apprentice',
-                    prof_xp INTEGER DEFAULT 0,
-                    prof_req_xp INTEGER DEFAULT 1000
-                )''')
+    # This is the Master Blueprint. If a column is here but not in the DB, 
+    # the bot will automatically create it on startup.
+    MASTER_SCHEMA = {
+        "user_id": "INTEGER PRIMARY KEY",
+        "background": "TEXT",
+        "rank_id": "INTEGER DEFAULT 0",
+        "rank": "TEXT DEFAULT 'The Bound (Mortal)'",
+        "item_id": "TEXT",
+        "taels": "INTEGER DEFAULT 0",
+        "ki": "INTEGER DEFAULT 0",
+        "vitality": "INTEGER DEFAULT 100",
+        "hp": "INTEGER DEFAULT 100",
+        "stage": "TEXT DEFAULT 'Initial'",
+        "last_refresh": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        "mastery": "REAL DEFAULT 0.0",
+        "active_tech": "TEXT DEFAULT 'None'",
+        "boss_flags": "TEXT DEFAULT ''",
+        "profession": "TEXT DEFAULT 'None'",
+        "prof_rank": "TEXT DEFAULT 'Apprentice'",
+        "prof_xp": "INTEGER DEFAULT 0",
+        "prof_req_xp": "INTEGER DEFAULT 1000",
+        "combat_mastery": "REAL DEFAULT 0.0",
+        "meridian_damage": "TEXT"
+    }
     
-    MIGRATIONS = [
-        ("stage", "TEXT DEFAULT 'Initial'"),
-        ("last_refresh", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
-        ("mastery", "REAL DEFAULT 0.0"),
-        ("active_tech", "TEXT DEFAULT 'None'"),
-        ("boss_flags", "TEXT DEFAULT ''"),
-        ("profession", "TEXT DEFAULT 'None'"),
-        ("prof_rank", "TEXT DEFAULT 'Apprentice'"),
-        ("prof_xp", "INTEGER DEFAULT 0"),
-        ("prof_req_xp", "INTEGER DEFAULT 1000")
-    ]
+    # Ensure the table exists
+    c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
     
-    for col_name, col_type in MIGRATIONS:
-        try:
-            c.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}")
-            print(f"🛠️ Database Migration: Added missing column [{col_name}]")
-        except sqlite3.OperationalError:
-            pass
+    # Auto-Discovery: Check what columns currently exist in the .db file
+    c.execute("PRAGMA table_info(users)")
+    existing_columns = [info[1] for info in c.fetchall()]
+    
+    # The Forge: Automatically add any column from the blueprint that is missing
+    for col_name, col_type in MASTER_SCHEMA.items():
+        if col_name not in existing_columns:
+            try:
+                # We don't add DEFAULT to PRIMARY KEY, handled by the dict
+                c.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}")
+                print(f"🛠️ AUTO-FIXER: Forged missing column [{col_name}] into the database.")
+            except Exception as e:
+                if col_name != "user_id": # Skip error if it's just the PK already existing
+                    print(f"⚠️ Warning: Could not forge column {col_name}: {e}")
 
     conn.commit()
     conn.close()
 
+# Run the self-healing check before the bot starts
 init_db()
 
 # ==========================================
