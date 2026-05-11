@@ -281,7 +281,7 @@ class Actions(commands.Cog):
         name="comprehend",
         description="Deeply study your martial technique."
     )
-    @app_commands.checks.cooldown(1, 1800.0)
+    @commands.cooldown(1, 1800, commands.BucketType.user)  # ✅ FIXED COOLDOWN
     async def comprehend(self, ctx):
 
         user_id = ctx.author.id
@@ -315,10 +315,19 @@ class Actions(commands.Cog):
                 ephemeral=True
             )
 
+        # ✅ NEW: mastery cap check FIRST
+        if mastery >= 100:
+            return await ctx.send(
+                "🧠 Your understanding has already reached its peak.",
+                ephemeral=True
+            )
+
         gain = round(random.uniform(5.0, 10.0), 2)
 
         new_vit = max(0, vit - 40)
         new_mastery = min(100.0, mastery + gain)
+
+        actual_gain = round(new_mastery - mastery, 2)  # ✅ FIX DISPLAY
 
         rare_event = self.get_rare_event()
 
@@ -350,7 +359,7 @@ class Actions(commands.Cog):
 
         embed.add_field(
             name="Mastery Gained",
-            value=f"📖 **+{gain}%**",
+            value=f"📖 **+{actual_gain}%**",  # ✅ FIXED
             inline=True
         )
 
