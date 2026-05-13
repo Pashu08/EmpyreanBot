@@ -159,6 +159,7 @@ class CombatView(discord.ui.View):
         self.log = "The battle lines are drawn."
         self.turn = 1
         self.daily_hunts_today = 0  # will be set before view starts
+        self.last_damage = 0
 
         # Technique effect display
         tech_name = self.player[5]
@@ -216,7 +217,7 @@ class CombatView(discord.ui.View):
                 "UPDATE users SET hp = 20, vitality = 20, taels = ?, meridian_damage = ? WHERE user_id = ?",
                 (new_taels, debuff, self.player[0])
             )
-            # Apply run away cooldown (2 min) if lost via running away? No, lost normally.
+            await db.commit()
             embed = discord.Embed(title="💀 DEFEATED", color=0x000000,
                                   description=f"You fell to **{self.enemy['name']}**.\n❌ Lost **{tael_loss}** Taels.\nMeridians damaged for 10 minutes.")
         else:  # victory
@@ -263,7 +264,7 @@ class CombatView(discord.ui.View):
     async def strike(self, interaction, button):
         async with self.lock:
             if self.ended: return
-            # Base attack from rank (using constants or fallback)
+            # Base attack from rank
             rank_atk = {"The Bound (Mortal)": 8, "Third-Rate Warrior": 25, "Second-Rate Warrior": 60, "First-Rate Warrior": 150, "Peak Master": 250}
             base_atk = rank_atk.get(self.player[6], 10)
             dmg = random.randint(base_atk, base_atk + 25)
@@ -340,7 +341,8 @@ class CombatView(discord.ui.View):
             tael_loss = max(1, int(self.player[8] * 0.10))
             new_taels = max(0, self.player[8] - tael_loss)
             await db.execute("UPDATE users SET taels = ? WHERE user_id = ?", (new_taels, self.player[0]))
-            # Store cooldown in bot's memory (will be checked in hunt command)
+            await db.commit()
+            # Store cooldown in bot's memory
             if not hasattr(self.bot, 'hunt_cooldowns'):
                 self.bot.hunt_cooldowns = {}
             self.bot.hunt_cooldowns[self.player[0]] = datetime.datetime.now() + datetime.timedelta(minutes=2)
@@ -349,8 +351,8 @@ class CombatView(discord.ui.View):
                                   description=f"You escaped but lost **{tael_loss} Taels**.\nYou cannot hunt for 2 minutes.")
             await self.safe_edit(interaction, embed, None)
             self.stop()
-
-# ==========================================
+            
+            # ==========================================
 # MAIN COG
 # ==========================================
 class Combat(commands.Cog):
@@ -392,10 +394,12 @@ class Combat(commands.Cog):
             else:
                 del self.bot.hunt_cooldowns[user_id]
 
-        user = await db.execute("""
+        async with db.execute("""
             SELECT user_id, hp, vitality, ki, mastery, active_tech, rank, combat_mastery, taels, meridian_damage
             FROM users WHERE user_id=?
-        """, (user_id,)).fetchone()
+        """, (user_id,)) as cursor:
+            user = await cursor.fetchone()
+
         if not user:
             return await ctx.send("❌ Use `!start` first.", ephemeral=True)
         damaged, _ = has_meridian_damage(user[9])
@@ -435,9 +439,10 @@ class Combat(commands.Cog):
 
         # Daily hunt tracking
         today = datetime.datetime.now().date().isoformat()
-        row = await db.execute("SELECT daily_hunts, last_hunt_date FROM users WHERE user_id=?", (user_id,)).fetchone()
-        daily_hunts = row[0] if row[0] else 0
-        last_date = row[1] if row[1] else ""
+        async with db.execute("SELECT daily_hunts, last_hunt_date FROM users WHERE user_id=?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+        daily_hunts = row[0] if row and row[0] else 0
+        last_date = row[1] if row and row[1] else ""
         if last_date != today:
             daily_hunts = 0
             await db.execute("UPDATE users SET daily_hunts=0, last_hunt_date=? WHERE user_id=?", (today, user_id))
