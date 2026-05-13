@@ -1,4 +1,10 @@
+import discord
+from discord.ext import commands
+
 class ErrorHandler(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+
     @commands.Cog.listener()
     async def on_command_error(self, ctx, error):
         if isinstance(error, commands.CommandOnCooldown):
@@ -9,6 +15,11 @@ class ErrorHandler(commands.Cog):
             pass  # checks already send their own messages
         elif isinstance(error, commands.CommandNotFound):
             pass  # silent — no spam
+        elif isinstance(error, discord.app_commands.errors.CommandOnCooldown):
+            await ctx.send(f"⏳ Wait **{error.retry_after:.1f}s**.", ephemeral=True)
         else:
             print(f"[ERROR] {ctx.command}: {error}")
-            raise error
+            # Don't raise error in production, just log it
+
+async def setup(bot):
+    await bot.add_cog(ErrorHandler(bot))

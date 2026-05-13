@@ -1,5 +1,5 @@
 import aiosqlite
-from typing import Optional
+from typing import Optional, Any
 
 # ── FETCH ──────────────────────────────────────────────────────
 
@@ -19,6 +19,21 @@ async def user_exists(db: aiosqlite.Connection, user_id: int) -> bool:
         "SELECT 1 FROM users WHERE user_id = ?", (user_id,)
     ) as cursor:
         return (await cursor.fetchone()) is not None
+
+async def get_user_stat(db: aiosqlite.Connection, user_id: int, stat_name: str) -> Any:
+    """Get a single stat from a user."""
+    async with db.execute(
+        f"SELECT {stat_name} FROM users WHERE user_id = ?", (user_id,)
+    ) as cursor:
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
+async def update_user_stat(db: aiosqlite.Connection, user_id: int, stat_name: str, value: Any):
+    """Update a single stat for a user."""
+    await db.execute(
+        f"UPDATE users SET {stat_name} = ? WHERE user_id = ?", (value, user_id)
+    )
+    await db.commit()
 
 # ── INVENTORY ──────────────────────────────────────────────────
 
@@ -47,8 +62,10 @@ async def remove_item(db: aiosqlite.Connection, user_id: int, item_name: str, qt
         (user_id, item_name)
     ) as cursor:
         row = await cursor.fetchone()
+    
     if not row or row[0] < qty:
         return False
+    
     if row[0] == qty:
         await db.execute(
             "DELETE FROM inventory WHERE user_id = ? AND item_name = ?",
@@ -59,8 +76,19 @@ async def remove_item(db: aiosqlite.Connection, user_id: int, item_name: str, qt
             "UPDATE inventory SET quantity = quantity - ? WHERE user_id = ? AND item_name = ?",
             (qty, user_id, item_name)
         )
+    
     await db.commit()
     return True
+
+async def has_item(db: aiosqlite.Connection, user_id: int, item_name: str, qty: int = 1) -> bool:
+    """Check if user has at least qty of an item."""
+    async with db.execute(
+        "SELECT quantity FROM inventory WHERE user_id = ? AND item_name = ?",
+        (user_id, item_name)
+    ) as cursor:
+        row = await cursor.fetchone()
+    
+    return row is not None and row[0] >= qty
 
 # ── ADMINS ─────────────────────────────────────────────────────
 
