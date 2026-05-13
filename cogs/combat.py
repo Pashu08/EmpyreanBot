@@ -429,6 +429,7 @@ class Combat(commands.Cog):
                 chosen_rarity = rname
                 break
         rarity_data = RARITIES[chosen_rarity]
+        rarity_data["name"] = chosen_rarity
         # Get enemy name and base stats
         name = ENEMY_NAMES[base_tier][chosen_rarity]
         base_enemy = ENEMIES[base_tier]  # from constants
