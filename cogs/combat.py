@@ -207,34 +207,32 @@ class CombatView(discord.ui.View):
 
     async def end_battle(self, interaction):
         db = self.bot.db
-        if self.player[1] <= 0:
+        if self.player[1] <= 0:  # Defeat
             tael_loss = max(1, int(self.player[8] * 0.10))
             new_taels = max(0, self.player[8] - tael_loss)
             debuff = (datetime.datetime.now() + datetime.timedelta(minutes=10)).isoformat()
             await db.execute(
-                "UPDATE users SET hp = 20, vitality = 20, taels = ?, meridian_damage = ? WHERE user_id = ?",
-                (new_taels, debuff, self.player[0])
+                "UPDATE users SET hp = 20, vitality = 20, ki = ?, taels = ?, meridian_damage = ? WHERE user_id = ?",
+                (self.player[3], new_taels, debuff, self.player[0])
             )
             await db.commit()
             embed = discord.Embed(title="💀 DEFEATED", color=0x000000,
                                   description=f"You fell to **{self.enemy['name']}**.\n❌ Lost **{tael_loss}** Taels.\nMeridians damaged for 10 minutes.")
-        else:
+        else:  # Victory
             base_reward = random.randint(50, 150)
             mult = self.rarity["reward_mult"]
             if self.daily_hunts_today < 3:
                 mult *= 2
             cm_bonus = 1 + (self.player[7] * 0.005)
             final_reward = int(base_reward * mult * cm_bonus)
-
             drop_item = None
             if random.random() < self.rarity["drop_chance"]:
                 possible_items = list(SHOP_ITEMS.keys())
                 drop_item = random.choice(possible_items)
                 await add_item(db, self.player[0], drop_item, 1)
-
             await db.execute("""
                 UPDATE users SET
-                    hp = ?, vitality = ?, taels = taels + ?,
+                    hp = ?, vitality = ?, ki = ?, taels = taels + ?,
                     combat_mastery = combat_mastery + 2.0,
                     hunt_total = COALESCE(hunt_total, 0) + 1,
                     hunt_taels_earned = COALESCE(hunt_taels_earned, 0) + ?,
@@ -242,17 +240,15 @@ class CombatView(discord.ui.View):
                     hunt_fastest_turns = CASE WHEN COALESCE(hunt_fastest_turns, 999) > ? THEN ? ELSE hunt_fastest_turns END,
                     hunt_elite_kills = hunt_elite_kills + CASE WHEN ? IN ('Elite','Master','Grandmaster','Mythical') THEN 1 ELSE 0 END
                 WHERE user_id = ?
-            """, (int(self.player[1]), int(self.player[2]), final_reward, final_reward, self.last_damage, self.turn, self.turn, self.rarity["name"], self.player[0]))
+            """, (int(self.player[1]), int(self.player[2]), self.player[3], final_reward, final_reward, self.last_damage, self.turn, self.turn, self.rarity["name"], self.player[0]))
             await db.commit()
-
             desc = f"The **{self.enemy['name']}** falls!\n💰 Earned: **{final_reward} Taels**\n⚔️ Gained: **2.0 Combat Mastery**"
             if drop_item:
                 desc += f"\n🎁 Dropped: **{drop_item}**"
             embed = discord.Embed(title="🏆 VICTORY", color=0x00FF00, description=desc)
-
         await self.safe_edit(interaction, embed, None)
         self.stop()
-
+        
     @discord.ui.button(label="Strike", style=discord.ButtonStyle.danger, emoji="⚔️")
     async def strike(self, interaction, button):
         async with self.lock:
