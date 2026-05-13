@@ -110,7 +110,7 @@ class Status(commands.Cog):
         
         return updated_data, now
 
-    @commands.hybrid_command(name="stats", description="View progress and claim AFK gains.")
+    @commands.hybrid_command(name="stats", aliases=["st"], description="View progress and claim AFK gains.")
     async def stats(self, ctx_or_inter, member: discord.Member = None):
         is_interaction = isinstance(ctx_or_inter, discord.Interaction)
         author = ctx_or_inter.user if is_interaction else ctx_or_inter.author
