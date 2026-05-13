@@ -442,4 +442,21 @@ class Combat(commands.Cog):
             daily_hunts = 0
             await db.execute("UPDATE users SET daily_hunts=0, last_hunt_date=? WHERE user_id=?", (today, user_id))
         daily_hunts += 1
-        await db.execute("UPDATE u
+        await db.execute("UPDATE users SET daily_hunts=? WHERE user_id=?", (daily_hunts, user_id))
+        await db.commit()
+
+        view = CombatView(self.bot, user_id, user, enemy, rarity_data, color)
+        view.daily_hunts_today = daily_hunts - 1  # because we already incremented
+        embed = discord.Embed(title=f"⚔️ Encounter: {name}", description=f"Rarity: **{chosen_rarity}**", color=color)
+        embed.add_field(name=f"👤 You (HP: {user[1]})", value=f"`{view.generate_bar(user[1], user[1])}`", inline=False)
+        embed.add_field(name=f"👹 {name} (HP: {enemy_hp})", value=f"`{view.generate_bar(enemy_hp, enemy_hp)}`", inline=False)
+        await ctx.send(embed=embed, view=view)
+
+    @commands.hybrid_command(name="huntleaderboard", aliases=["hlb"])
+    async def hunt_leaderboard(self, ctx):
+        view = LeaderboardView(self.bot, ctx.author.id)
+        embed = await view.get_leaderboard_embed("total_hunts")
+        await ctx.send(embed=embed, view=view)
+
+async def setup(bot):
+    await bot.add_cog(Combat(bot))
