@@ -334,7 +334,8 @@ class CombatView(discord.ui.View):
                                   description=f"You escaped but lost **{tael_loss} Taels**.\nYou cannot hunt for 2 minutes.")
             await self.safe_edit(interaction, embed, None)
             self.stop()
-    # ==========================================
+            
+# ==========================================
 # MAIN COG
 # ==========================================
 class Combat(commands.Cog):
