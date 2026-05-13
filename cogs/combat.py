@@ -363,36 +363,50 @@ class Combat(commands.Cog):
         self.bot.loop.create_task(self.init_db_columns())
 
     async def init_db_columns(self):
-        await self.bot.wait_until_ready()
-        db = self.bot.db
-        columns = {
-            "hunt_total": "INTEGER DEFAULT 0",
-            "hunt_damage_max": "INTEGER DEFAULT 0",
-            "hunt_fastest_turns": "INTEGER DEFAULT 999",
-            "hunt_elite_kills": "INTEGER DEFAULT 0",
-            "hunt_taels_earned": "INTEGER DEFAULT 0",
-            "daily_hunts": "INTEGER DEFAULT 0",
-            "last_hunt_date": "TEXT"
-        }
-        async with db.execute("PRAGMA table_info(users)") as cur:
-            existing = [row[1] for row in await cur.fetchall()]
-        for col, dtype in columns.items():
-            if col not in existing:
-                await db.execute(f"ALTER TABLE users ADD COLUMN {col} {dtype}")
-        await db.commit()
+    await self.bot.wait_until_ready()
+    db = self.bot.db
+    columns = {
+        "hunt_total": "INTEGER DEFAULT 0",
+        "hunt_damage_max": "INTEGER DEFAULT 0",
+        "hunt_fastest_turns": "INTEGER DEFAULT 999",
+        "hunt_elite_kills": "INTEGER DEFAULT 0",
+        "hunt_taels_earned": "INTEGER DEFAULT 0",
+        "daily_hunts": "INTEGER DEFAULT 0",
+        "last_hunt_date": "TEXT"
+    }
+    async with db.execute("PRAGMA table_info(users)") as cur:
+        existing = [row[1] for row in await cur.fetchall()]
+    for col, dtype in columns.items():
+        if col not in existing:
+            await db.execute(f"ALTER TABLE users ADD COLUMN {col} {dtype}")
+    # Create inventory table if it doesn't exist
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS inventory (
+            user_id INTEGER,
+            item_name TEXT,
+            quantity INTEGER DEFAULT 1,
+            PRIMARY KEY (user_id, item_name)
+        )
+    """)
+    await db.commit()
 
     @commands.hybrid_command(name="hunt", aliases=["h"])
     async def hunt(self, ctx):
         user_id = ctx.author.id
         db = self.bot.db
 
-        # Check run away cooldown
-        if hasattr(self.bot, 'hunt_cooldowns') and user_id in self.bot.hunt_cooldowns:
-            if datetime.datetime.now() < self.bot.hunt_cooldowns[user_id]:
-                remaining = (self.bot.hunt_cooldowns[user_id] - datetime.datetime.now()).seconds
-                return await ctx.send(f"⏳ You are recovering from a cowardly escape. Wait **{remaining}s**.", ephemeral=True)
-            else:
-                del self.bot.hunt_cooldowns[user_id]
+# Check run away cooldown
+if hasattr(self.bot, 'hunt_cooldowns') and user_id in self.bot.hunt_cooldowns:
+    if datetime.datetime.now() < self.bot.hunt_cooldowns[user_id]:
+        remaining = (self.bot.hunt_cooldowns[user_id] - datetime.datetime.now()).seconds
+        embed = discord.Embed(
+            title="⏳ Escape Recovery",
+            description=f"You are still recovering from your last escape.\nPlease wait **{remaining} seconds** before hunting again.",
+            color=0xFFA500
+        )
+        return await ctx.send(embed=embed, ephemeral=True)
+    else:
+        del self.bot.hunt_cooldowns[user_id]
 
         async with db.execute("""
             SELECT user_id, hp, vitality, ki, mastery, active_tech, rank, combat_mastery, taels, meridian_damage
