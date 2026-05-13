@@ -273,7 +273,6 @@ class Actions(commands.Cog):
         )
 
         await ctx.send(embed=embed)
-
     # ==========================================
     # HYBRID COMMAND: COMPREHEND
     # ==========================================
