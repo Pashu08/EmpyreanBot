@@ -246,7 +246,7 @@ class CombatView(discord.ui.View):
                     hunt_taels_earned = COALESCE(hunt_taels_earned, 0) + ?,
                     hunt_damage_max = MAX(COALESCE(hunt_damage_max, 0), ?),
                     hunt_fastest_turns = CASE WHEN COALESCE(hunt_fastest_turns, 999) > ? THEN ? ELSE hunt_fastest_turns END,
-                    hunt_elite_kills = hunt_elite_kills + (1 if ? in ('Elite','Master','Grandmaster','Mythical') else 0)
+                    hunt_elite_kills = hunt_elite_kills + CASE WHEN ? IN ('Elite','Master','Grandmaster','Mythical') THEN 1 ELSE 0 END
                 WHERE user_id = ?
             """, (int(self.player[1]), int(self.player[2]), final_reward, final_reward, self.last_damage, self.turn, self.turn, self.rarity["name"], self.player[0]))
             await db.commit()
