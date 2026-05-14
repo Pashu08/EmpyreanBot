@@ -1,97 +1,12 @@
 import discord
 from discord.ext import commands, tasks
-from discord import app_commands
-import sqlite3
 import asyncio
 import datetime
-
-# --- NEW: ADVANCED PAVILION UI ---
-class PavilionSelect(discord.ui.Select):
-    def __init__(self, member_id):
-        self.member_id = member_id
-        options = [
-            discord.SelectOption(label="Flowing Cloud Steps", description="Focus: Evasion & Agility", emoji="💨"),
-            discord.SelectOption(label="Swift Wind Kick", description="Focus: Speed & Multi-hit", emoji="🦶"),
-            discord.SelectOption(label="Golden Bell Shield", description="Focus: Damage Reduction", emoji="🔔"),
-            discord.SelectOption(label="Vajra Guard Mantra", description="Focus: Vitality Regeneration", emoji="🧘")
-        ]
-        super().__init__(placeholder="Examine a scroll more closely...", options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.member_id:
-            return await interaction.response.send_message("❌ This enlightenment is not meant for you.", ephemeral=True)
-
-        selection = self.values[0]
-        view: PavilionView = self.view
-        view.selected_tech = selection
-
-        details = {
-            "Flowing Cloud Steps": {
-                "story": "The ink on this scroll drifts like mist. It depicts a master walking through a rainstorm without a single drop touching his robes.",
-                "effect": "🔹 **Effect:** Increases **Dodge Chance by 15%**. You become a ghost on the battlefield.",
-                "color": 0x3498db
-            },
-            "Swift Wind Kick": {
-                "story": "The paper is warm to the touch. You see drawings of a warrior whose legs move so fast they create vacuum blades.",
-                "effect": "🔹 **Effect:** Increases **Attack Speed**. Grants a chance to strike twice in one turn.",
-                "color": 0xe67e22
-            },
-            "Golden Bell Shield": {
-                "story": "This scroll is heavy, bound in iron. It describes the art of hardening Ki into an invisible bell of protection.",
-                "effect": "🔹 **Effect:** Reduces **Incoming Damage by 20%**. Stand firm against any tide.",
-                "color": 0xf1c40f
-            },
-            "Vajra Guard Mantra": {
-                "story": "A soothing light radiates from the symbols. It teaches the secret of breathing in rhythm with the heavens to heal wounds.",
-                "effect": "🔹 **Effect:** Restores **5% HP every turn** during combat. Your endurance is limitless.",
-                "color": 0x2ecc71
-            }
-        }
-
-        data = details[selection]
-        embed = discord.Embed(
-            title=f"📜 Inspecting: {selection}", 
-            description=f"*{data['story']}*\n\n{data['effect']}", 
-            color=data['color']
-        )
-        embed.set_footer(text="If this path calls to you, click 'Begin Training' below.")
-        
-        view.confirm_btn.disabled = False
-        await interaction.response.edit_message(embed=embed, view=view)
-
-class PavilionView(discord.ui.View):
-    def __init__(self, ctx, member_id, db_func):
-        super().__init__(timeout=60)
-        self.ctx = ctx
-        self.member_id = member_id
-        self.get_db = db_func
-        self.selected_tech = None
-
-        self.add_item(PavilionSelect(member_id))
-        
-        self.confirm_btn = discord.ui.Button(label="Begin Training", style=discord.ButtonStyle.success, disabled=True)
-        self.confirm_btn.callback = self.confirm_selection
-        self.add_item(self.confirm_btn)
-
-    async def confirm_selection(self, interaction: discord.Interaction):
-        conn = self.get_db()
-        c = conn.cursor()
-        c.execute("UPDATE users SET active_tech = ?, mastery = 0.0 WHERE user_id = ?", (self.selected_tech, self.member_id))
-        conn.commit()
-        conn.close()
-
-        embed = discord.Embed(
-            title="✨ Path Bound", 
-            description=f"You have committed your soul to the **{self.selected_tech}**.\n\n"
-                        f"Your journey toward mastery begins now. Use `!observe` or `!comprehend` to train.",
-            color=0x00FF00
-        )
-        await interaction.response.edit_message(embed=embed, view=None)
+from utils.helpers import get_max_stats
 
 class Mechanics(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # Track active meditation and cooldowns
         self.meditating = set()
         self.cooldowns = {}
         self.heartbeat.start()
@@ -99,50 +14,62 @@ class Mechanics(commands.Cog):
     def cog_unload(self):
         self.heartbeat.cancel()
 
-    def get_db(self):
-        return sqlite3.connect('murim.db')
-
     # ==========================================
-    # BUFFED HEARTBEAT LOOP (Automatic Recovery)
+    # HEARTBEAT (automatic recovery every 10 min)
     # ==========================================
     @tasks.loop(minutes=10.0)
     async def heartbeat(self):
-        conn = self.get_db()
-        c = conn.cursor()
-        users = c.execute("SELECT user_id, hp, vitality, rank FROM users").fetchall()
-        
+        db = self.bot.db
+        async with db.execute("SELECT user_id, hp, vitality, rank FROM users") as cursor:
+            users = await cursor.fetchall()
+
         for user in users:
             u_id, current_hp, current_vit, rank = user
-            # BUFFED RATES: Players can actually play now
-            if "Second-Rate" in rank: regen = 100
-            elif "Third-Rate" in rank: regen = 50
-            else: regen = 25 # Mortal now gets 25% back every 10m
-            
-            caps = {"The Bound (Mortal)": 100, "Third-Rate Warrior": 300, "Second-Rate Warrior": 600}
-            limit = caps.get(rank, 1000)
-            
-            new_hp = min(current_hp + regen, limit)
-            new_vit = min(current_vit + regen, limit)
-            
+            # Determine regen amount based on rank
+            if "Second-Rate" in rank:
+                regen = 100
+            elif "Third-Rate" in rank:
+                regen = 50
+            else:
+                regen = 25
+
+            max_stats = get_max_stats(rank)
+            limit_hp = max_stats["max_hp"]
+            limit_vit = max_stats["max_vit"]
+
+            new_hp = min(current_hp + regen, limit_hp)
+            new_vit = min(current_vit + regen, limit_vit)
+
             if new_hp != current_hp or new_vit != current_vit:
-                c.execute("UPDATE users SET hp = ?, vitality = ? WHERE user_id = ?", (new_hp, new_vit, u_id))
-        
-        conn.commit()
-        conn.close()
+                await db.execute(
+                    "UPDATE users SET hp = ?, vitality = ? WHERE user_id = ?",
+                    (new_hp, new_vit, u_id)
+                )
+                # Send DM notification (improvement A)
+                user_obj = self.bot.get_user(u_id)
+                if user_obj:
+                    try:
+                        await user_obj.send(
+                            f"🌿 **Heavenly Recovery**\n"
+                            f"You regain **{new_hp - current_hp} HP** and **{new_vit - current_vit} Vitality**.\n"
+                            f"Current: {new_hp} HP / {new_vit} Vitality"
+                        )
+                    except discord.Forbidden:
+                        pass  # can't DM, ignore
+        await db.commit()
 
     @heartbeat.before_loop
     async def before_heartbeat(self):
         await self.bot.wait_until_ready()
 
     # ==========================================
-    # ACTIVE RECOVERY (Lotus Meditation)
+    # RECOVER (active meditation)
     # ==========================================
-    @commands.hybrid_command(name="recover", description="Active meditation: Restore 25 Vit in 60s.")
+    @commands.hybrid_command(name="recover", description="Active meditation: Restore 25 Vit & 5 Ki in 60s.")
     async def recover(self, ctx):
         user_id = ctx.author.id
         now = datetime.datetime.now()
 
-        # 1. Check Cooldown (5 Minutes)
         if user_id in self.cooldowns:
             if now < self.cooldowns[user_id]:
                 diff = self.cooldowns[user_id] - now
@@ -152,84 +79,85 @@ class Mechanics(commands.Cog):
             return await ctx.send("🧘 You are already in deep meditation.", ephemeral=True)
 
         self.meditating.add(user_id)
-        # Lockout shared with bot for other cogs
-        if not hasattr(self.bot, 'is_meditating'): self.bot.is_meditating = set()
+        if not hasattr(self.bot, 'is_meditating'):
+            self.bot.is_meditating = set()
         self.bot.is_meditating.add(user_id)
 
-        await ctx.send("🧘 You enter a state of deep meditation. Your senses dull as your Ki stabilizes... (Wait: 60s)")
-        
-        await asyncio.sleep(60)
-        
-        # 2. Update Database
-        conn = self.get_db()
-        c = conn.cursor()
-        # Cap logic: Find player rank to check limits
-        res = c.execute("SELECT rank FROM users WHERE user_id = ?", (user_id,)).fetchone()
-        caps = {"The Bound (Mortal)": 100, "Third-Rate Warrior": 300, "Second-Rate Warrior": 600}
-        limit = caps.get(res[0], 1000) if res else 100
-        
-        c.execute("UPDATE users SET vitality = MIN(vitality + 25, ?) WHERE user_id = ?", (limit, user_id))
-        conn.commit()
-        conn.close()
+        msg = await ctx.send("🧘 You enter a state of deep meditation. Your senses dull as your Ki stabilizes... (60s)")
 
-        # 3. Set Cooldown & Cleanup
+        # Countdown every 10 seconds (improvement B)
+        for remaining in range(50, -1, -10):
+            await asyncio.sleep(10)
+            await msg.edit(content=f"🧘 Meditating... **{remaining}s** left.")
+
+        await asyncio.sleep(10)  # final 10 seconds
+
+        db = self.bot.db
+        async with db.execute("SELECT rank, ki FROM users WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            self.meditating.remove(user_id)
+            self.bot.is_meditating.remove(user_id)
+            return await ctx.send("❌ You are not registered. Use `!start` first.", ephemeral=True)
+
+        rank, current_ki = row
+        max_stats = get_max_stats(rank)
+        ki_cap = max_stats["ki_cap"]
+        vit_cap = max_stats["max_vit"]
+
+        # Add 25 Vitality and 5 Ki (improvement C)
+        new_vit = min(vit_cap, (await db.execute("SELECT vitality FROM users WHERE user_id=?", (user_id,))).fetchone()[0] + 25)
+        new_ki = min(ki_cap, current_ki + 5)
+
+        await db.execute("UPDATE users SET vitality = ?, ki = ? WHERE user_id = ?", (new_vit, new_ki, user_id))
+        await db.commit()
+
         self.meditating.remove(user_id)
         self.bot.is_meditating.remove(user_id)
         self.cooldowns[user_id] = now + datetime.timedelta(minutes=5)
-        
-        await ctx.send(f"✨ {ctx.author.mention}, you open your eyes as refreshing energy flows through your meridians! (+25 Vitality)")
+
+        await msg.edit(content=f"✨ {ctx.author.mention}, you open your eyes as refreshing energy flows through your meridians! (+25 Vitality, +5 Ki)")
 
     # ==========================================
-    # HYBRID COMMANDS (!pavilion)
+    # MEDITATE (check next heartbeat)
     # ==========================================
-    @commands.hybrid_command(name="pavilion")
-    async def pavilion(self, ctx):
-        # Meditating check
-        if hasattr(self.bot, 'is_meditating') and ctx.author.id in self.bot.is_meditating:
-            return await ctx.send("❌ You cannot enter the Pavilion while in deep meditation!", ephemeral=True)
-
-        conn = self.get_db()
-        c = conn.cursor()
-        user = c.execute("SELECT rank, ki, active_tech, mastery FROM users WHERE user_id = ?", (ctx.author.id,)).fetchone()
-        conn.close()
-
-        if not user:
-            return await ctx.send("❌ Use `!start` first.", ephemeral=True)
-
-        rank, ki, active_tech, mastery = user
-        if "Mortal" in rank and ki < 100:
-            return await ctx.send("❌ The scrolls are sealed. You need **100 Ki** to understand these foundations.", ephemeral=True)
-
-        if active_tech != "None":
-            embed = discord.Embed(
-                title="🏮 Pavilion: Current Focus",
-                description=f"You are currently focusing on **{active_tech}**.\n"
-                            f"**Current Mastery:** `{mastery}%` / 100%\n\n"
-                            f"*To switch techniques, you must complete your current study or reset your progress.*",
-                color=0x700000
-            )
-            return await ctx.send(embed=embed)
-
-        view = PavilionView(ctx, ctx.author.id, self.get_db)
-        embed = discord.Embed(
-            title="🏮 Pavilion of Hidden Scrolls",
-            description="The air is thick with the scent of old paper. Choose a scroll from the menu below to read its legend.",
-            color=0x700000
-        )
-        await ctx.send(embed=embed, view=view)
-
-    @commands.hybrid_command(name="meditate", description="Check natural recovery status")
+    @commands.hybrid_command(name="meditate", description="Check natural recovery status and predicted gains.")
     async def meditate_status(self, ctx):
         next_it = self.heartbeat.next_iteration
-        if next_it:
-            now = datetime.datetime.now(datetime.timezone.utc)
-            time_left = next_it - now
-            minutes = int(time_left.total_seconds() // 60)
-            seconds = int(time_left.total_seconds() % 60)
-            await ctx.send(
-                f"🧘 The heavens will breathe again in **{minutes}m {seconds}s**, restoring your Vitality.", 
-                ephemeral=True
-            )
+        if not next_it:
+            return await ctx.send("Heartbeat is not scheduled yet.", ephemeral=True)
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        time_left = next_it - now
+        minutes = int(time_left.total_seconds() // 60)
+        seconds = int(time_left.total_seconds() % 60)
+
+        # Get user's rank to predict recovery (improvement D)
+        db = self.bot.db
+        async with db.execute("SELECT rank FROM users WHERE user_id = ?", (ctx.author.id,)) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return await ctx.send("❌ Use `!start` first.", ephemeral=True)
+
+        rank = row[0]
+        if "Second-Rate" in rank:
+            regen = 100
+        elif "Third-Rate" in rank:
+            regen = 50
+        else:
+            regen = 25
+
+        embed = discord.Embed(
+            title="🧘 Meditation Status",
+            description=f"The heavens will breathe again in **{minutes}m {seconds}s**.",
+            color=0x700000
+        )
+        embed.add_field(
+            name="Next Recovery",
+            value=f"Restores **{regen} HP** and **{regen} Vitality** (based on your rank).",
+            inline=False
+        )
+        await ctx.send(embed=embed, ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Mechanics(bot))
