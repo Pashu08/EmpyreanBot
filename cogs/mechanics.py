@@ -6,32 +6,47 @@ from utils.helpers import get_max_stats
 
 class Mechanics(commands.Cog):
     def __init__(self, bot):
+        print("[DEBUG] __init__ started")
         self.bot = bot
         self.meditating = set()
         self.recover_cooldowns = {}
         self.focus_cooldowns = {}
         self.rest_cooldowns = {}
+        print("[DEBUG] __init__ finished, creating _delayed_start task")
         self.bot.loop.create_task(self._delayed_start())
+        print("[DEBUG] __init__ done")
 
     async def _delayed_start(self):
+        print("[DEBUG] _delayed_start called")
         await self.bot.wait_until_ready()
+        print("[DEBUG] Bot is ready")
         await self._init_db_column()
+        print("[DEBUG] DB column checked/created")
         self.heartbeat.start()
+        print("[DEBUG] Heartbeat started")
 
     async def _init_db_column(self):
+        print("[DEBUG] _init_db_column started")
         db = self.bot.db
         async with db.execute("PRAGMA table_info(users)") as cur:
             cols = [row[1] for row in await cur.fetchall()]
         if "heartbeat_dm" not in cols:
+            print("[DEBUG] Adding heartbeat_dm column")
             await db.execute("ALTER TABLE users ADD COLUMN heartbeat_dm INTEGER DEFAULT 1")
             await db.commit()
+            print("[DEBUG] Column added")
+        else:
+            print("[DEBUG] Column already exists")
+        print("[DEBUG] _init_db_column finished")
 
     def cog_unload(self):
+        print("[DEBUG] cog_unload called")
         self.heartbeat.cancel()
 
     # ========== HEARTBEAT ==========
     @tasks.loop(minutes=20.0)
     async def heartbeat(self):
+        print("[DEBUG] Heartbeat loop running")
         db = self.bot.db
         async with db.execute("SELECT user_id, hp, vitality, rank, heartbeat_dm FROM users") as cursor:
             users = await cursor.fetchall()
@@ -65,10 +80,13 @@ class Mechanics(commands.Cog):
                         except discord.Forbidden:
                             pass
         await db.commit()
+        print("[DEBUG] Heartbeat loop finished")
 
     @heartbeat.before_loop
     async def before_heartbeat(self):
+        print("[DEBUG] before_heartbeat waiting for bot ready")
         await self.bot.wait_until_ready()
+        print("[DEBUG] before_heartbeat done")
 
     # ========== TOGGLE DM ==========
     @commands.hybrid_command(name="toggle_dm", description="Enable/disable heartbeat recovery DMs")
@@ -317,4 +335,6 @@ class Mechanics(commands.Cog):
         await ctx.send(embed=embed)
 
 async def setup(bot):
+    print("[DEBUG] setup() called for mechanics")
     await bot.add_cog(Mechanics(bot))
+    print("[DEBUG] setup() finished")
