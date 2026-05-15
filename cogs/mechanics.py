@@ -9,10 +9,15 @@ class Mechanics(commands.Cog):
         self.bot = bot
         self.meditating = set()
         self.cooldowns = {}          # for recover cooldown
-        self.rest_cooldowns = {}     # for !rest cooldown
+        self.rest_cooldowns = {}     # for rest cooldown
+        self.focus_cooldowns = {}    # for focus cooldown
+        # Do NOT start heartbeat here – we wait for cog_load
+
+    async def cog_load(self):
+        # Ensure the heartbeat_dm column exists before heartbeat starts
+        await self.init_db_column()
+        # Now start the heartbeat loop
         self.heartbeat.start()
-        # Ensure database has heartbeat_dm column (default ON)
-        self.bot.loop.create_task(self.init_db_column())
 
     async def init_db_column(self):
         await self.bot.wait_until_ready()
@@ -76,7 +81,7 @@ class Mechanics(commands.Cog):
         await self.bot.wait_until_ready()
 
     # ==========================================
-    # TOGGLE HEARTBEAT DMs (feature 3)
+    # TOGGLE HEARTBEAT DMs
     # ==========================================
     @commands.hybrid_command(name="toggle_dm", description="Enable/disable heartbeat recovery DMs")
     async def toggle_dm(self, ctx):
@@ -93,14 +98,13 @@ class Mechanics(commands.Cog):
         await ctx.send(f"✅ Heartbeat DMs **{status}**.", ephemeral=True)
 
     # ==========================================
-    # RECOVER (active meditation) – polish 1,2,4,7
+    # RECOVER (active meditation) – with progress bar, Hermit bonus
     # ==========================================
-    @commands.hybrid_command(name="recover", description="Active meditation: Restore 25 Vit & 5 Ki in 60s.")
+    @commands.hybrid_command(name="recover", description="Active meditation: Restore Vit & Ki in 60s.")
     async def recover(self, ctx):
         user_id = ctx.author.id
         now = datetime.datetime.now()
 
-        # Cooldown check (feature 7 – shown in meditate, but also here)
         if user_id in self.cooldowns:
             if now < self.cooldowns[user_id]:
                 diff = self.cooldowns[user_id] - now
@@ -116,12 +120,11 @@ class Mechanics(commands.Cog):
 
         msg = await ctx.send("🧘 You enter a state of deep meditation. Your senses dull as your Ki stabilizes... (60s)")
 
-        # Polish 1: progress bar
         total_time = 60
         for remaining in range(total_time, -1, -10):
             await asyncio.sleep(10)
             percent = (remaining / total_time) * 100
-            filled = int(percent / 10)  # 10 segments
+            filled = int(percent / 10)
             bar = "█" * filled + "░" * (10 - filled)
             if remaining > 0:
                 await msg.edit(content=f"🧘 Meditating... `[{bar}]` **{remaining}s** left.")
@@ -141,14 +144,17 @@ class Mechanics(commands.Cog):
         ki_cap = max_stats["ki_cap"]
         vit_cap = max_stats["max_vit"]
 
-        # Add 25 Vitality, 5 Ki (Hermit bonus: +10/+10)
         vit_gain = 25
         ki_gain = 5
         if background == "Hermit":
             vit_gain = 35
             ki_gain = 15
 
-        new_vit = min(vit_cap, (await db.execute("SELECT vitality FROM users WHERE user_id=?", (user_id,))).fetchone()[0] + vit_gain)
+        async with db.execute("SELECT vitality FROM users WHERE user_id=?", (user_id,)) as vit_cursor:
+            vit_row = await vit_cursor.fetchone()
+            current_vit = vit_row[0] if vit_row else 0
+
+        new_vit = min(vit_cap, current_vit + vit_gain)
         new_ki = min(ki_cap, current_ki + ki_gain)
 
         await db.execute("UPDATE users SET vitality = ?, ki = ? WHERE user_id = ?", (new_vit, new_ki, user_id))
@@ -174,7 +180,7 @@ class Mechanics(commands.Cog):
         await ctx.send("🧘 You snap out of your meditation early.", ephemeral=True)
 
     # ==========================================
-    # MEDITATE (check next heartbeat) – polish 5 & 7
+    # MEDITATE (check next heartbeat, Ki progress, recover cooldown)
     # ==========================================
     @commands.hybrid_command(name="meditate", description="Check natural recovery status and predicted gains.")
     async def meditate_status(self, ctx):
@@ -199,7 +205,6 @@ class Mechanics(commands.Cog):
         vit_cap = max_stats["max_vit"]
         hp_cap = max_stats["max_hp"]
 
-        # Regen amount (same as heartbeat)
         if "Second-Rate" in rank:
             regen = 100
         elif "Third-Rate" in rank:
@@ -207,10 +212,8 @@ class Mechanics(commands.Cog):
         else:
             regen = 25
 
-        # Ki progress to next rank (polish 5 – simplified)
         ki_progress = int((ki / ki_cap) * 100) if ki_cap > 0 else 0
 
-        # Recover cooldown remaining (polish 7)
         recover_cd = ""
         if ctx.author.id in self.cooldowns:
             cd_until = self.cooldowns[ctx.author.id]
@@ -239,15 +242,14 @@ class Mechanics(commands.Cog):
         await ctx.send(embed=embed, ephemeral=True)
 
     # ==========================================
-    # NEW COMMAND: !focus (convert Vitality to Ki)
+    # !focus – convert Vitality to Ki
     # ==========================================
     @commands.hybrid_command(name="focus", description="Convert 10 Vitality into 5 Ki. 5 min cooldown.")
     async def focus(self, ctx):
         user_id = ctx.author.id
         now = datetime.datetime.now()
 
-        # Cooldown check
-        if hasattr(self, 'focus_cooldowns') and user_id in self.focus_cooldowns:
+        if user_id in self.focus_cooldowns:
             if now < self.focus_cooldowns[user_id]:
                 diff = self.focus_cooldowns[user_id] - now
                 return await ctx.send(f"❌ Your mind is exhausted. Wait **{int(diff.total_seconds())}s** before focusing again.", ephemeral=True)
@@ -271,8 +273,6 @@ class Mechanics(commands.Cog):
         await db.execute("UPDATE users SET vitality = ?, ki = ? WHERE user_id = ?", (new_vit, new_ki, user_id))
         await db.commit()
 
-        if not hasattr(self, 'focus_cooldowns'):
-            self.focus_cooldowns = {}
         self.focus_cooldowns[user_id] = now + datetime.timedelta(minutes=5)
 
         await ctx.send(f"🌀 You focus your inner energy, converting **10 Vitality** into **5 Ki**!\n"
@@ -280,7 +280,7 @@ class Mechanics(commands.Cog):
                        f"New Ki: {new_ki} / {ki_cap}")
 
     # ==========================================
-    # NEW COMMAND: !rest (instant small heal, 1h cooldown)
+    # !rest – instant small heal, 1h cooldown
     # ==========================================
     @commands.hybrid_command(name="rest", description="Instantly restore 10 HP and 10 Vitality. 1 hour cooldown.")
     async def rest(self, ctx):
