@@ -1,3 +1,5 @@
+print("[DEBUG] constants.py: Loading Murim game data...")
+
 # ── RANKS (ordered, index = rank_id) ──────────────────────────
 RANKS = [
     "The Bound (Mortal)",
@@ -49,7 +51,7 @@ OBSERVE_VIT_COST = 10
 COMPREHEND_VIT_COST = 40
 RECOVER_VIT_GAIN = 25
 RECOVER_COOLDOWN = 300   # seconds
-HUNT_COOLDOWN    = 600   # seconds — ADD THIS, currently 0
+HUNT_COOLDOWN    = 600   # seconds
 
 # ── COMBAT ENEMIES ────────────────────────────────────────────
 ENEMIES = {
@@ -162,3 +164,53 @@ COLOR_GOLD   = 0xFFD700
 COLOR_TEAL   = 0x00AABB
 
 STAGES = ["Initial", "Early", "Middle", "Late", "Peak"]
+
+# ==========================================
+# NEW MURIM IDEAS (added)
+# ==========================================
+
+# ── RANDOM MURIM EVENTS (for work, observe, hunt, etc.) ───────
+MURIM_EVENTS = [
+    ("🍂 A wandering master shares a breath technique.", {"ki": 15}),
+    ("📜 You find an old martial arts scroll in a cave.", {"mastery": 2.0}),
+    ("💊 A poisoned needle pricks your finger. You lose 10 Vitality.", {"vit": -10}),
+    ("💰 A rich merchant thanks you for saving his son. You gain 50 Taels.", {"taels": 50}),
+    ("🌙 Under the moonlight, your Ki circulation improves.", {"ki": 25}),
+    ("⚔️ A rogue martial artist challenges you. You win and gain 5 Combat Mastery.", {"combat_mastery": 5}),
+    ("📖 You meditate near a waterfall and gain insight.", {"mastery": 3.0}),
+    ("🩸 An elder forces a Blood Pill into your mouth. +20 Ki, -5 HP.", {"ki": 20, "hp": -5}),
+    ("🏮 You help an old woman carry her goods. She gives you 30 Taels.", {"taels": 30}),
+    ("🌀 Your Qi fluctuates wildly – you lose 10 Ki.", {"ki": -10}),
+    ("🌸 A mysterious fragrance heals your wounds. +15 HP.", {"hp": 15}),
+    ("🏔️ You discover a hidden spring. +25 Vitality.", {"vit": 25}),
+]
+
+# ── FACTIONS (Reputation system) ─────────────────────────────
+FACTIONS = {
+    "Orthodox": {
+        "desc": "Righteous sects like Mount Hua, Southern Edge, Beggar Sect.",
+        "starting_reputation": 0,
+        "rewards": {
+            50: "Orthodox amulet – +5% Ki regen",
+            100: "Martial technique: Righteous Palm",
+        },
+    },
+    "Unorthodox": {
+        "desc": "Neutral or independent martial artists, wanderers.",
+        "starting_reputation": 0,
+        "rewards": {
+            50: "Unorthodox token – +5% Taels gain",
+            100: "Martial technique: Shadow Step",
+        },
+    },
+    "Demonic Cult": {
+        "desc": "Forbidden sects that use blood arts and demonic energy.",
+        "starting_reputation": -50,
+        "rewards": {
+            -100: "Demonic mark – +10% damage at night",
+            -200: "Forbidden art: Blood Rebirth",
+        },
+    },
+}
+
+print("[DEBUG] constants.py: Loaded Murim game data successfully")

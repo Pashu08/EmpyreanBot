@@ -13,19 +13,18 @@ import json
 print("[DEBUG] main.py: Starting imports...")
 
 # ==========================================
-# ERROR LOGGING TO FILE (Idea 4)
+# ERROR LOGGING TO FILE
 # ==========================================
 def log_error_to_file(error_message):
-    """Append error to bot_errors.log"""
     try:
         with open("bot_errors.log", "a", encoding="utf-8") as f:
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             f.write(f"[{timestamp}] {error_message}\n")
     except:
-        pass  # Fail silently if logging fails
+        pass
 
 # ==========================================
-# WEB DASHBOARD (Idea 6)
+# WEB DASHBOARD
 # ==========================================
 class DashboardServer:
     def __init__(self, bot):
@@ -37,16 +36,14 @@ class DashboardServer:
         self.last_error = "No errors yet"
 
     def set_last_error(self, error):
-        self.last_error = str(error)[:500]  # Limit length
+        self.last_error = str(error)[:500]
 
     async def handle_index(self, request):
-        """Simple HTML dashboard"""
         cog_count = len(self.bot.cogs)
         cog_names = list(self.bot.cogs.keys())
         uptime = datetime.datetime.now() - self.start_time
-        uptime_str = str(uptime).split('.')[0]  # remove microseconds
+        uptime_str = str(uptime).split('.')[0]
 
-        # Get user count from database (if available)
         user_count = 0
         if self.bot.db:
             try:
@@ -66,7 +63,6 @@ class DashboardServer:
                 h1 {{ color: #00ffcc; }}
                 .status {{ background: #0f3460; padding: 20px; border-radius: 10px; margin: 10px 0; }}
                 .online {{ color: #00ff00; }}
-                .offline {{ color: #ff0000; }}
                 .value {{ font-weight: bold; color: #ffcc00; }}
             </style>
         </head>
@@ -88,7 +84,6 @@ class DashboardServer:
         return web.Response(text=html, content_type='text/html')
 
     async def start(self):
-        """Start the web server"""
         self.app = web.Application()
         self.app.router.add_get('/', self.handle_index)
         self.runner = web.AppRunner(self.app)
@@ -96,7 +91,6 @@ class DashboardServer:
         self.site = web.TCPSite(self.runner, '0.0.0.0', config.WEB_DASHBOARD_PORT)
         await self.site.start()
 
-        # Print access info
         import socket
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -121,6 +115,7 @@ async def init_db():
     async with aiosqlite.connect("murim.db") as conn:
         c = await conn.cursor()
 
+        # --- Users table (existing + new columns for actions.py) ---
         MASTER_SCHEMA = {
             "user_id": "INTEGER PRIMARY KEY",
             "background": "TEXT",
@@ -141,7 +136,15 @@ async def init_db():
             "prof_xp": "INTEGER DEFAULT 0",
             "prof_req_xp": "INTEGER DEFAULT 1000",
             "combat_mastery": "REAL DEFAULT 0.0",
-            "meridian_damage": "TEXT"
+            "meridian_damage": "TEXT",
+            # === NEW COLUMNS FOR actions.py ===
+            "daily_work_date": "TEXT",
+            "daily_observe_date": "TEXT",
+            "mastery_flags": "TEXT",
+            "teaching_bonus_dodge": "INTEGER DEFAULT 0",
+            "teaching_bonus_crit": "INTEGER DEFAULT 0",
+            "teaching_bonus_dmg_reduction": "INTEGER DEFAULT 0",
+            "teaching_bonus_regen": "INTEGER DEFAULT 0",
         }
 
         await c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
@@ -160,6 +163,59 @@ async def init_db():
                     if col_name != "user_id":
                         print(f"[DEBUG] init_db: Failed to add {col_name}: {e}")
                         log_error_to_file(f"init_db column add failed: {col_name} - {e}")
+
+        # --- NEW: bot_settings table ---
+        await c.execute("""
+            CREATE TABLE IF NOT EXISTS bot_settings (
+                setting_key TEXT PRIMARY KEY,
+                setting_value TEXT
+            )
+        """)
+        print("[DEBUG] init_db: bot_settings table ensured")
+
+        # --- NEW: admin_permissions table ---
+        await c.execute("""
+            CREATE TABLE IF NOT EXISTS admin_permissions (
+                user_id INTEGER,
+                permission TEXT,
+                PRIMARY KEY (user_id, permission)
+            )
+        """)
+        print("[DEBUG] init_db: admin_permissions table ensured")
+
+        # --- NEW: user_cooldowns table (survives restart) ---
+        await c.execute("""
+            CREATE TABLE IF NOT EXISTS user_cooldowns (
+                cooldown_key TEXT PRIMARY KEY,
+                last_used TIMESTAMP
+            )
+        """)
+        print("[DEBUG] init_db: user_cooldowns table ensured")
+
+        # --- NEW: banned_users table ---
+        await c.execute("""
+            CREATE TABLE IF NOT EXISTS banned_users (
+                user_id INTEGER PRIMARY KEY,
+                reason TEXT,
+                banned_at TIMESTAMP,
+                banned_by INTEGER
+            )
+        """)
+        print("[DEBUG] init_db: banned_users table ensured")
+
+        # --- Insert default bot_settings if missing (so toggles work) ---
+        default_settings = [
+            ("toggle_actions", "True"),
+            ("actions_vit_cost_work", "10"),
+            ("actions_vit_cost_observe", "10"),
+            ("actions_vit_cost_comprehend", "40"),
+        ]
+        for key, value in default_settings:
+            await c.execute(
+                "INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)",
+                (key, value)
+            )
+        print("[DEBUG] init_db: Default bot_settings inserted")
 
         await conn.commit()
         elapsed = time.time() - start_time
@@ -181,6 +237,8 @@ class MurimBot(commands.Bot):
         self.startup_time = time.time()
         self.dashboard = None
         self._shutdown_handled = False
+        self.active_combats = {}  # To track users in combat
+        self.command_cooldowns = {}  # In-memory cooldowns
 
         super().__init__(
             command_prefix=config.PREFIX,
@@ -192,7 +250,6 @@ class MurimBot(commands.Bot):
         print("[DEBUG] setup_hook: Started")
         overall_start = time.time()
 
-        # Check token
         if not config.TOKEN:
             print("[ERROR] No Discord token found in config/.env")
             log_error_to_file("FATAL: No Discord token found")
@@ -205,7 +262,6 @@ class MurimBot(commands.Bot):
         self.db = await aiosqlite.connect("murim.db")
         print("[DEBUG] setup_hook: Database connection opened")
 
-        # Start web dashboard (Idea 6)
         if config.WEB_DASHBOARD_ENABLED:
             try:
                 self.dashboard = DashboardServer(self)
@@ -239,18 +295,16 @@ class MurimBot(commands.Bot):
         if cogs_failed:
             print(f"[DEBUG] setup_hook: Failed cogs: {cogs_failed}")
 
-        # Store startup stats for dashboard
         self.cogs_loaded_count = cogs_loaded
         self.cogs_failed_list = cogs_failed
         self.startup_duration = load_time
 
     async def close(self):
-        print("[DEBUG] close: Graceful shutdown started (Idea 5)")
+        print("[DEBUG] close: Graceful shutdown started")
         if self._shutdown_handled:
             return
         self._shutdown_handled = True
 
-        # Stop web dashboard
         if self.dashboard:
             try:
                 await self.dashboard.stop()
@@ -258,7 +312,6 @@ class MurimBot(commands.Bot):
             except:
                 pass
 
-        # Close database connection
         if self.db:
             try:
                 await self.db.close()
@@ -273,21 +326,19 @@ class MurimBot(commands.Bot):
         startup_duration = time.time() - self.startup_time
         print("\n--- Murim: Empyrean Ascent is Online ---")
         print(f"Logged in as: {self.user.name}")
-        print(f"Startup took {startup_duration:.2f} seconds (Idea 1)")
+        print(f"Startup took {startup_duration:.2f} seconds")
         print(f"Cogs loaded: {len(self.cogs)}")
         print("Status: Database Sync Complete")
         print("------------------------------------------")
         print("[DEBUG] on_ready: Bot is fully ready")
 
-        # Startup announcement to Discord channel (Idea 3)
         if config.STARTUP_ANNOUNCE_CHANNEL_ID:
             try:
                 channel = self.get_channel(config.STARTUP_ANNOUNCE_CHANNEL_ID)
                 if channel:
                     embed = discord.Embed(
                         title="🌿 Empyrean Ascent Bot Online",
-                        description=f"Bot started successfully in {startup_duration:.2f}s\n"
-                                   f"Loaded {len(self.cogs)} cogs",
+                        description=f"Bot started successfully in {startup_duration:.2f}s\nLoaded {len(self.cogs)} cogs",
                         color=0x00FF00
                     )
                     await channel.send(embed=embed)
@@ -299,12 +350,11 @@ class MurimBot(commands.Bot):
                 log_error_to_file(f"Startup announcement failed: {e}")
 
 # ==========================================
-# GRACEFUL SHUTDOWN HANDLER (Idea 5)
+# GRACEFUL SHUTDOWN HANDLER
 # ==========================================
 bot_instance = None
 
 def signal_handler(signum, frame):
-    """Handle Ctrl+C gracefully"""
     print("\n[DEBUG] Received shutdown signal. Cleaning up...")
     if bot_instance:
         asyncio.create_task(bot_instance.close())
@@ -317,7 +367,6 @@ if __name__ == "__main__":
     bot_instance = MurimBot()
     bot = bot_instance
 
-    # Set up signal handler for Ctrl+C
     import signal
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
