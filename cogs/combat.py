@@ -3,9 +3,12 @@ from discord.ext import commands
 import random
 import asyncio
 import datetime
-from utils.constants import ENEMIES, TECHNIQUES, SHOP_ITEMS
-from utils.helpers import has_meridian_damage
-from utils.db import add_item
+from utils.helpers import format_embed_color, has_meridian_damage
+from utils.db import get_bot_setting, is_user_banned, get_user_stat, update_user_stat, add_item, remove_item
+from utils.constants import ENEMIES, SHOP_ITEMS
+import config
+
+print("[DEBUG] combat.py: Loading Combat cog...")
 
 # ==========================================
 # ENEMY RARITY SYSTEM (5 tiers)
@@ -51,7 +54,7 @@ ENEMY_NAMES = {
 }
 
 # ==========================================
-# LEADERBOARD VIEW (buttons to cycle)
+# LEADERBOARD VIEW
 # ==========================================
 class LeaderboardView(discord.ui.View):
     def __init__(self, bot, user_id):
@@ -91,7 +94,7 @@ class LeaderboardView(discord.ui.View):
         """) as cursor:
             rows = await cursor.fetchall()
 
-        embed = discord.Embed(title=title, color=0x700000)
+        embed = discord.Embed(title=title, color=format_embed_color("main"))
         if not rows:
             embed.description = "No data yet. Go hunt!"
         else:
@@ -140,7 +143,7 @@ class LeaderboardView(discord.ui.View):
 # COMBAT VIEW (the actual battle)
 # ==========================================
 class CombatView(discord.ui.View):
-    def __init__(self, bot, author_id, player_data, enemy_data, rarity, color):
+    def __init__(self, bot, author_id, player_data, enemy_data, rarity, color, pre_hunt_stats):
         super().__init__(timeout=180)
         self.bot = bot
         self.author_id = author_id
@@ -148,6 +151,7 @@ class CombatView(discord.ui.View):
         self.color = color
         self.lock = asyncio.Lock()
         self.ended = False
+        self.pre_hunt_stats = pre_hunt_stats   # original HP/Vit to restore after hunt
 
         # player_data: (user_id, hp, vitality, ki, mastery, active_tech, rank, combat_mastery, taels)
         self.player = list(player_data)
@@ -207,17 +211,25 @@ class CombatView(discord.ui.View):
 
     async def end_battle(self, interaction):
         db = self.bot.db
+        user_id = self.player[0]
+
+        # RESTORE original HP and Vitality (no permanent loss)
+        original = self.pre_hunt_stats[user_id]
+        await update_user_stat(db, user_id, "hp", original["hp"])
+        await update_user_stat(db, user_id, "vitality", original["vitality"])
+
         if self.player[1] <= 0:  # Defeat
             tael_loss = max(1, int(self.player[8] * 0.10))
             new_taels = max(0, self.player[8] - tael_loss)
+            await update_user_stat(db, user_id, "taels", new_taels)
+            # Apply meridian damage (10 minutes)
             debuff = (datetime.datetime.now() + datetime.timedelta(minutes=10)).isoformat()
-            await db.execute(
-                "UPDATE users SET hp = 20, vitality = 20, ki = ?, taels = ?, meridian_damage = ? WHERE user_id = ?",
-                (self.player[3], new_taels, debuff, self.player[0])
+            await update_user_stat(db, user_id, "meridian_damage", debuff)
+            embed = discord.Embed(
+                title="💀 DEFEATED",
+                description=f"You fell to **{self.enemy['name']}**.\n❌ Lost **{tael_loss}** Taels.\nMeridians damaged for 10 minutes.",
+                color=format_embed_color("lose")
             )
-            await db.commit()
-            embed = discord.Embed(title="💀 DEFEATED", color=0x000000,
-                                  description=f"You fell to **{self.enemy['name']}**.\n❌ Lost **{tael_loss}** Taels.\nMeridians damaged for 10 minutes.")
         else:  # Victory
             base_reward = random.randint(50, 150)
             mult = self.rarity["reward_mult"]
@@ -225,30 +237,44 @@ class CombatView(discord.ui.View):
                 mult *= 2
             cm_bonus = 1 + (self.player[7] * 0.005)
             final_reward = int(base_reward * mult * cm_bonus)
+
+            # Update Taels
+            new_taels = self.player[8] + final_reward
+            await update_user_stat(db, user_id, "taels", new_taels)
+
+            # Update Combat Mastery
+            new_cm = self.player[7] + 2.0
+            await update_user_stat(db, user_id, "combat_mastery", new_cm)
+
+            # Update hunt stats
+            await db.execute("UPDATE users SET hunt_total = COALESCE(hunt_total, 0) + 1 WHERE user_id = ?", (user_id,))
+            await db.execute("UPDATE users SET hunt_taels_earned = COALESCE(hunt_taels_earned, 0) + ? WHERE user_id = ?", (final_reward, user_id))
+            await db.execute("UPDATE users SET hunt_damage_max = MAX(COALESCE(hunt_damage_max, 0), ?) WHERE user_id = ?", (self.last_damage, user_id))
+            await db.execute("UPDATE users SET hunt_fastest_turns = MIN(COALESCE(hunt_fastest_turns, 999), ?) WHERE user_id = ?", (self.turn, user_id))
+            # Elite kill bonus (if rarity is Elite or higher)
+            if self.rarity["name"] in ("Elite","Master","Grandmaster","Mythical"):
+                await db.execute("UPDATE users SET hunt_elite_kills = COALESCE(hunt_elite_kills, 0) + 1 WHERE user_id = ?", (user_id,))
+            await db.commit()
+
+            # Item drop
             drop_item = None
             if random.random() < self.rarity["drop_chance"]:
                 possible_items = list(SHOP_ITEMS.keys())
                 drop_item = random.choice(possible_items)
-                await add_item(db, self.player[0], drop_item, 1)
-            await db.execute("""
-                UPDATE users SET
-                    hp = ?, vitality = ?, ki = ?, taels = taels + ?,
-                    combat_mastery = combat_mastery + 2.0,
-                    hunt_total = COALESCE(hunt_total, 0) + 1,
-                    hunt_taels_earned = COALESCE(hunt_taels_earned, 0) + ?,
-                    hunt_damage_max = MAX(COALESCE(hunt_damage_max, 0), ?),
-                    hunt_fastest_turns = CASE WHEN COALESCE(hunt_fastest_turns, 999) > ? THEN ? ELSE hunt_fastest_turns END,
-                    hunt_elite_kills = hunt_elite_kills + CASE WHEN ? IN ('Elite','Master','Grandmaster','Mythical') THEN 1 ELSE 0 END
-                WHERE user_id = ?
-            """, (int(self.player[1]), int(self.player[2]), self.player[3], final_reward, final_reward, self.last_damage, self.turn, self.turn, self.rarity["name"], self.player[0]))
-            await db.commit()
+                await add_item(db, user_id, drop_item, 1)
+
             desc = f"The **{self.enemy['name']}** falls!\n💰 Earned: **{final_reward} Taels**\n⚔️ Gained: **2.0 Combat Mastery**"
             if drop_item:
                 desc += f"\n🎁 Dropped: **{drop_item}**"
-            embed = discord.Embed(title="🏆 VICTORY", color=0x00FF00, description=desc)
+            embed = discord.Embed(title="🏆 VICTORY", color=format_embed_color("win"), description=desc)
+
         await self.safe_edit(interaction, embed, None)
+        # Remove from active combats
+        if hasattr(self.bot, 'active_combats') and user_id in self.bot.active_combats:
+            del self.bot.active_combats[user_id]
         self.stop()
-        
+
+    # ---------- Strike Button ----------
     @discord.ui.button(label="Strike", style=discord.ButtonStyle.danger, emoji="⚔️")
     async def strike(self, interaction, button):
         async with self.lock:
@@ -275,12 +301,13 @@ class CombatView(discord.ui.View):
             self.turn += 1
             await self.update_embed(interaction)
 
+    # ---------- Technique Button ----------
     @discord.ui.button(label="Technique", style=discord.ButtonStyle.primary, emoji="🌀")
     async def technique(self, interaction, button):
         async with self.lock:
             if self.ended: return
             if self.player[3] < 15:
-                await interaction.response.send_message("❌ Not enough Ki!", ephemeral=True)
+                await interaction.response.send_message(config.MSG_NO_KI.format(required=15), ephemeral=True)
                 return
             self.player[3] -= 15
             tech_name = self.player[5]
@@ -310,6 +337,7 @@ class CombatView(discord.ui.View):
             self.turn += 1
             await self.update_embed(interaction)
 
+    # ---------- Run Away Button ----------
     @discord.ui.button(label="Run Away", style=discord.ButtonStyle.secondary, emoji="🏃")
     async def run_away(self, interaction, button):
         async with self.lock:
@@ -318,19 +346,27 @@ class CombatView(discord.ui.View):
             for child in self.children:
                 child.disabled = True
             db = self.bot.db
+            user_id = self.player[0]
+            # Restore HP/Vit
+            original = self.pre_hunt_stats[user_id]
+            await update_user_stat(db, user_id, "hp", original["hp"])
+            await update_user_stat(db, user_id, "vitality", original["vitality"])
+            # Penalty: lose 10% Taels + 2 min cooldown
             tael_loss = max(1, int(self.player[8] * 0.10))
             new_taels = max(0, self.player[8] - tael_loss)
-            await db.execute("UPDATE users SET taels = ? WHERE user_id = ?", (new_taels, self.player[0]))
-            await db.commit()
+            await update_user_stat(db, user_id, "taels", new_taels)
+            # Store cooldown in bot's memory
             if not hasattr(self.bot, 'hunt_cooldowns'):
                 self.bot.hunt_cooldowns = {}
-            self.bot.hunt_cooldowns[self.player[0]] = datetime.datetime.now() + datetime.timedelta(minutes=2)
-
-            embed = discord.Embed(title="🏃‍♂️ You fled the battle", color=0xFFA500,
-                                  description=f"You escaped but lost **{tael_loss} Taels**.\nYou cannot hunt for 2 minutes.")
+            self.bot.hunt_cooldowns[user_id] = datetime.datetime.now() + datetime.timedelta(minutes=2)
+            embed = discord.Embed(
+                title="🏃‍♂️ You fled the battle",
+                description=f"You escaped but lost **{tael_loss} Taels**.\nYou cannot hunt for 2 minutes.",
+                color=format_embed_color("lose")
+            )
             await self.safe_edit(interaction, embed, None)
             self.stop()
-            
+
 # ==========================================
 # MAIN COG
 # ==========================================
@@ -339,6 +375,7 @@ class Combat(commands.Cog):
         self.bot = bot
         self.bot.hunt_cooldowns = {}
         self.bot.loop.create_task(self.init_db_columns())
+        print("[DEBUG] Combat cog initialized")
 
     async def init_db_columns(self):
         await self.bot.wait_until_ready()
@@ -357,41 +394,65 @@ class Combat(commands.Cog):
         for col, dtype in columns.items():
             if col not in existing:
                 await db.execute(f"ALTER TABLE users ADD COLUMN {col} {dtype}")
+        # Create inventory table if not exists (already in main.py, but safe)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS inventory (
                 user_id INTEGER,
                 item_name TEXT,
                 quantity INTEGER DEFAULT 1,
+                bound INTEGER DEFAULT 0,
                 PRIMARY KEY (user_id, item_name)
             )
         """)
         await db.commit()
 
+    async def _is_feature_enabled(self, ctx):
+        enabled = await get_bot_setting(self.bot.db, "toggle_combat", True)
+        if not enabled:
+            await ctx.send(config.MSG_FEATURE_DISABLED.format(feature="Combat"), ephemeral=True)
+        return enabled
+
     @commands.hybrid_command(name="hunt", aliases=["h"])
     async def hunt(self, ctx):
+        print(f"[DEBUG] combat.hunt: Called by {ctx.author.id}")
+
+        if not await self._is_feature_enabled(ctx):
+            return
+        if await is_user_banned(self.bot.db, ctx.author.id):
+            return await ctx.send(config.MSG_BANNED, ephemeral=True)
+
         user_id = ctx.author.id
         db = self.bot.db
 
+        # Check run away cooldown
         if hasattr(self.bot, 'hunt_cooldowns') and user_id in self.bot.hunt_cooldowns:
             if datetime.datetime.now() < self.bot.hunt_cooldowns[user_id]:
-                remaining = (self.bot.hunt_cooldowns[user_id] - datetime.datetime.now()).seconds
+                remaining = int((self.bot.hunt_cooldowns[user_id] - datetime.datetime.now()).total_seconds())
                 embed = discord.Embed(
                     title="⏳ Escape Recovery",
                     description=f"You are still recovering from your last escape.\nPlease wait **{remaining} seconds** before hunting again.",
-                    color=0xFFA500
+                    color=format_embed_color("lose")
                 )
                 return await ctx.send(embed=embed, ephemeral=True)
             else:
                 del self.bot.hunt_cooldowns[user_id]
 
+        # Check if already in combat
+        if not hasattr(self.bot, 'active_combats'):
+            self.bot.active_combats = {}
+        if user_id in self.bot.active_combats:
+            return await ctx.send("❌ You are already in combat! Finish your current fight first.", ephemeral=True)
+
+        # Fetch player data
         async with db.execute("""
             SELECT user_id, hp, vitality, ki, mastery, active_tech, rank, combat_mastery, taels, meridian_damage
             FROM users WHERE user_id=?
         """, (user_id,)) as cursor:
             user = await cursor.fetchone()
-
         if not user:
-            return await ctx.send("❌ Use `!start` first.", ephemeral=True)
+            return await ctx.send(config.MSG_NOT_REGISTERED, ephemeral=True)
+
+        # Check meridian damage
         damaged, _ = has_meridian_damage(user[9])
         if damaged:
             return await ctx.send("❌ Your meridians are damaged. You cannot hunt.", ephemeral=True)
@@ -408,6 +469,7 @@ class Combat(commands.Cog):
         else:
             return await ctx.send("❌ Mortals cannot hunt spirit beasts.", ephemeral=True)
 
+        # Choose rarity
         rand = random.randint(1, 100)
         cumulative = 0
         chosen_rarity = None
@@ -418,6 +480,7 @@ class Combat(commands.Cog):
                 break
         rarity_data = RARITIES[chosen_rarity].copy()
         rarity_data["name"] = chosen_rarity
+
         name = ENEMY_NAMES[base_tier][chosen_rarity]
         base_enemy = ENEMIES[base_tier]
         enemy_hp = int(base_enemy["hp"] * rarity_data["hp_mult"])
@@ -425,6 +488,7 @@ class Combat(commands.Cog):
         enemy = {"name": name, "hp": enemy_hp, "atk": enemy_atk}
         color = base_enemy["color"]
 
+        # Daily hunt tracking
         today = datetime.datetime.now().date().isoformat()
         async with db.execute("SELECT daily_hunts, last_hunt_date FROM users WHERE user_id=?", (user_id,)) as cursor:
             row = await cursor.fetchone()
@@ -437,7 +501,18 @@ class Combat(commands.Cog):
         await db.execute("UPDATE users SET daily_hunts=? WHERE user_id=?", (daily_hunts, user_id))
         await db.commit()
 
-        view = CombatView(self.bot, user_id, user, enemy, rarity_data, color)
+        # Save pre-hunt HP and Vitality (to restore later)
+        pre_hunt_stats = {
+            user_id: {
+                "hp": user[1],
+                "vitality": user[2],
+            }
+        }
+
+        # Mark user as in combat
+        self.bot.active_combats[user_id] = True
+
+        view = CombatView(self.bot, user_id, user, enemy, rarity_data, color, pre_hunt_stats)
         view.daily_hunts_today = daily_hunts - 1
         embed = discord.Embed(title=f"⚔️ Encounter: {name}", description=f"Rarity: **{chosen_rarity}**", color=color)
         embed.add_field(name=f"👤 You (HP: {user[1]})", value=f"`{view.generate_bar(user[1], user[1])}`", inline=False)
@@ -446,9 +521,15 @@ class Combat(commands.Cog):
 
     @commands.hybrid_command(name="huntleaderboard", aliases=["hlb"])
     async def hunt_leaderboard(self, ctx):
+        print(f"[DEBUG] combat.hunt_leaderboard: Called by {ctx.author.id}")
+        if not await self._is_feature_enabled(ctx):
+            return
+        if await is_user_banned(self.bot.db, ctx.author.id):
+            return await ctx.send(config.MSG_BANNED, ephemeral=True)
         view = LeaderboardView(self.bot, ctx.author.id)
         embed = await view.get_leaderboard_embed("total_hunts")
         await ctx.send(embed=embed, view=view)
 
 async def setup(bot):
     await bot.add_cog(Combat(bot))
+    print("[DEBUG] combat.py: Setup complete")

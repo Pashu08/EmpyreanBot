@@ -226,6 +226,10 @@ async def init_db():
             ("actions_vit_cost_comprehend", "40"),
             ("toggle_status", "True"),
             ("toggle_profile", "True"),
+            ("toggle_pavilion", "True"),
+            ("toggle_pvp", "True"),
+            ("toggle_core", "True")
+            ("toggle_combat", "True")
         ]
         for key, value in default_settings:
             await c.execute(

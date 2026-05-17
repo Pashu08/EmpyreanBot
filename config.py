@@ -97,6 +97,11 @@ MSG_FOCUS_COMPLETE = "🌀 Focused! Converted **10 Vitality** → **5 Ki**."
 MSG_REST_COMPLETE = "🛌 Rest taken! Restored **10 HP** and **10 Vitality**."
 MSG_FEATURE_DISABLED = "❌ The **{feature}** feature is currently disabled."
 MSG_BANNED = "❌ You are banned from using this bot."
+MSG_ALREADY_REGISTERED = "❌ Your path is already set. Check your `!stats`."
+MSG_FEATURE_DISABLED = "❌ The **{feature}** feature is currently disabled."
+MSG_BANNED = "❌ You are banned from using this bot."
+MSG_NOT_REGISTERED = "❌ Use `!start` first."
+MSG_NO_KI = "❌ Not enough Ki. You need **{required}** Ki."
 
 # ==========================================
 # IDEA 7: DEBUG MODE (default value)

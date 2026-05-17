@@ -52,6 +52,7 @@ COMPREHEND_VIT_COST = 40
 RECOVER_VIT_GAIN = 25
 RECOVER_COOLDOWN = 300   # seconds
 HUNT_COOLDOWN    = 600   # seconds
+PVP_DAMAGE_RANGE = (10, 25)   # min, max damage per strike
 
 # ── COMBAT ENEMIES ────────────────────────────────────────────
 ENEMIES = {
@@ -242,6 +243,16 @@ FACTIONS = {
             -200: "Forbidden art: Blood Rebirth",
         },
     },
+}
+
+# ── HIDDEN TECHNIQUES (unlocked by mastering specific techniques) ──
+HIDDEN_TECHNIQUES = {
+    # Example structure – add your own hidden techniques here later
+    # "Flowing Cloud Shadow Step": {
+    #     "required_techniques": ["Flowing Cloud Steps", "Swift Wind Kick"],
+    #     "description": "Teleport behind an enemy. Guaranteed critical hit.",
+    #     "combat_effect": "teleport_crit",
+    # },
 }
 
 print("[DEBUG] constants.py: Loaded Murim game data successfully")
