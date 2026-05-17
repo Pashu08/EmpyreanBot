@@ -6,6 +6,7 @@ import discord
 from discord.ext import commands, tasks
 
 from utils.helpers import get_max_stats
+from utils.db import get_bot_setting  # ADDED for feature toggle
 
 log = logging.getLogger(__name__)
 
@@ -13,7 +14,7 @@ class Mechanics(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.meditating: set[int] = set()
-        self.meditation_start_times: dict[int, datetime.datetime] = {}  # ADDED: Track when meditation started
+        self.meditation_start_times: dict[int, datetime.datetime] = {}  # Track when meditation started
         # Initialise bot-level set once, so cancel never crashes
         if not hasattr(self.bot, "is_meditating"):
             self.bot.is_meditating = set()
@@ -23,18 +24,30 @@ class Mechanics(commands.Cog):
         self.bot.loop.create_task(self._delayed_start())
 
     # ------------------------------------------------------------------
+    # Feature toggle helper (ADDED)
+    # ------------------------------------------------------------------
+
+    async def _is_feature_enabled(self, ctx):
+        enabled = await get_bot_setting(self.bot.db, "toggle_mechanics", True)
+        if not enabled:
+            await ctx.send(
+                embed=discord.Embed(
+                    title="❌ Feature Disabled",
+                    description="The mechanics system is currently disabled.",
+                    color=0xE74C3C,
+                ),
+                ephemeral=True,
+            )
+        return enabled
+
+    # ------------------------------------------------------------------
     # Startup
     # ------------------------------------------------------------------
 
     async def _delayed_start(self):
         await self.bot.wait_until_ready()
-        # REMOVED: _init_db_column call since heartbeat_dm is now in MASTER_SCHEMA
-        # await self._init_db_column()  # No longer needed
         self.heartbeat.start()
         log.info("Mechanics cog ready; heartbeat started.")
-
-    # REMOVED: _init_db_column method entirely (lines 43-52 original)
-    # The heartbeat_dm column is now created by main.py's MASTER_SCHEMA
 
     def cog_unload(self):
         self.heartbeat.cancel()
@@ -51,9 +64,8 @@ class Mechanics(commands.Cog):
         ) as cursor:
             users = await cursor.fetchall()
 
-        # ADDED: Track count for rate limiting
         dm_count = 0
-        
+
         for u_id, current_hp, current_vit, rank, dm_enabled in users:
             if "Second-Rate" in rank:
                 regen = 100
@@ -81,11 +93,10 @@ class Mechanics(commands.Cog):
                 user_obj = self.bot.get_user(u_id)
                 if user_obj:
                     try:
-                        # ADDED: Rate limit protection - delay every 5 DMs
                         dm_count += 1
                         if dm_count % 5 == 0:
                             await asyncio.sleep(1)
-                        
+
                         embed = discord.Embed(
                             title="🌿 Heavenly Recovery",
                             description=(
@@ -138,6 +149,11 @@ class Mechanics(commands.Cog):
         name="toggle_dm", description="Enable/disable heartbeat recovery DMs"
     )
     async def toggle_dm(self, ctx):
+        print(f"[DEBUG] mechanics.toggle_dm: Called by {ctx.author.id}")
+
+        if not await self._is_feature_enabled(ctx):
+            return
+
         db = self.bot.db
         async with db.execute(
             "SELECT heartbeat_dm FROM users WHERE user_id = ?", (ctx.author.id,)
@@ -179,6 +195,11 @@ class Mechanics(commands.Cog):
         description="Meditate for 60 s to restore Vitality and Ki (5 min cooldown)",
     )
     async def recover(self, ctx):
+        print(f"[DEBUG] mechanics.recover: Called by {ctx.author.id}")
+
+        if not await self._is_feature_enabled(ctx):
+            return
+
         user_id = ctx.author.id
 
         remaining = self._cooldown_remaining(self.recover_cooldowns, user_id)
@@ -202,9 +223,8 @@ class Mechanics(commands.Cog):
                 ephemeral=True,
             )
 
-        # Mark as meditating
         self.meditating.add(user_id)
-        self.meditation_start_times[user_id] = self._utcnow()  # ADDED: Track start time
+        self.meditation_start_times[user_id] = self._utcnow()
         self.bot.is_meditating.add(user_id)
 
         msg = await ctx.send(
@@ -215,7 +235,6 @@ class Mechanics(commands.Cog):
             )
         )
 
-        # Countdown — bail early if cancelled
         total_time = 60
         elapsed = 0
         cancelled = False
@@ -224,7 +243,7 @@ class Mechanics(commands.Cog):
             await asyncio.sleep(10)
             elapsed += 10
 
-            if user_id not in self.meditating:  # cancel was called
+            if user_id not in self.meditating:
                 cancelled = True
                 break
 
@@ -241,15 +260,13 @@ class Mechanics(commands.Cog):
                 )
             )
 
-        # Always clean up state (may already be removed by cancel)
         self.meditating.discard(user_id)
-        self.meditation_start_times.pop(user_id, None)  # ADDED: Clean up start time
+        self.meditation_start_times.pop(user_id, None)
         self.bot.is_meditating.discard(user_id)
 
         if cancelled:
-            return  # cancel command already sent its own reply
+            return
 
-        # Apply gains
         db = self.bot.db
         async with db.execute(
             "SELECT rank, ki, vitality, background FROM users WHERE user_id = ?",
@@ -301,13 +318,16 @@ class Mechanics(commands.Cog):
 
     @commands.hybrid_command(name="cancel", description="Cancel active meditation")
     async def cancel_meditation(self, ctx):
+        print(f"[DEBUG] mechanics.cancel_meditation: Called by {ctx.author.id}")
+
+        if not await self._is_feature_enabled(ctx):
+            return
+
         user_id = ctx.author.id
         if user_id in self.meditating:
-            # ADDED: Penalty for early cancellation
             if user_id in self.meditation_start_times:
                 elapsed = (self._utcnow() - self.meditation_start_times[user_id]).total_seconds()
-                if elapsed < 30:  # Cancelled within first 30 seconds
-                    # Apply 2-minute cooldown penalty
+                if elapsed < 30:
                     self.recover_cooldowns[user_id] = self._utcnow() + datetime.timedelta(minutes=2)
                     await ctx.send(
                         embed=discord.Embed(
@@ -317,9 +337,9 @@ class Mechanics(commands.Cog):
                         ),
                         ephemeral=True,
                     )
-            
+
             self.meditating.discard(user_id)
-            self.meditation_start_times.pop(user_id, None)  # ADDED: Clean up start time
+            self.meditation_start_times.pop(user_id, None)
             self.bot.is_meditating.discard(user_id)
             await ctx.send(
                 embed=discord.Embed(
@@ -347,6 +367,11 @@ class Mechanics(commands.Cog):
         name="meditate", description="Check next heartbeat and your stats"
     )
     async def meditate_status(self, ctx):
+        print(f"[DEBUG] mechanics.meditate_status: Called by {ctx.author.id}")
+
+        if not await self._is_feature_enabled(ctx):
+            return
+
         next_it = self.heartbeat.next_iteration
         if not next_it:
             return await ctx.send(
@@ -386,7 +411,6 @@ class Mechanics(commands.Cog):
         vit_cap = max_stats["max_vit"]
         hp_cap  = max_stats["max_hp"]
 
-        # FIXED: Use HEARTBEAT_REGEN from constants for consistency
         from utils.constants import HEARTBEAT_REGEN
         regen = HEARTBEAT_REGEN.get(rank, 25)
 
@@ -432,6 +456,11 @@ class Mechanics(commands.Cog):
         description="Convert 10 Vitality into 5 Ki (5 min cooldown)",
     )
     async def focus(self, ctx):
+        print(f"[DEBUG] mechanics.focus: Called by {ctx.author.id}")
+
+        if not await self._is_feature_enabled(ctx):
+            return
+
         user_id = ctx.author.id
 
         remaining = self._cooldown_remaining(self.focus_cooldowns, user_id)
@@ -506,6 +535,11 @@ class Mechanics(commands.Cog):
         description="Instantly restore 10 HP and 10 Vitality (1 hour cooldown)",
     )
     async def rest(self, ctx):
+        print(f"[DEBUG] mechanics.rest: Called by {ctx.author.id}")
+
+        if not await self._is_feature_enabled(ctx):
+            return
+
         user_id = ctx.author.id
 
         remaining = self._cooldown_remaining(self.rest_cooldowns, user_id)

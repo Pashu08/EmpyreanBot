@@ -103,6 +103,7 @@ MSG_BANNED = "❌ You are banned from using this bot."
 MSG_NOT_REGISTERED = "❌ Use `!start` first."
 MSG_NO_KI = "❌ Not enough Ki. You need **{required}** Ki."
 MSG_MISSING_ARGUMENT = "❌ Missing required argument: `{param}`. Check `!help` for usage."
+MSG_HELP_ALREADY_VIEWING = "❌ This manual is being studied by another. Open your own with `!help`."
 
 # ==========================================
 # IDEA 7: DEBUG MODE (default value)
