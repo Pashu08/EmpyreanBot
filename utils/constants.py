@@ -154,6 +154,37 @@ SHOP_ITEMS = {
         "shop": "Shady Dealer",
         "effect": {"ki": 100, "hp": -50},
     },
+    # === NEW SHOP ITEMS ===
+    "Iron Bandage": {
+        "price": 25,
+        "desc": "Rough bandage. Restores 10 HP.",
+        "shop": "Provisioner",
+        "effect": {"hp": 10},
+    },
+    "Herbal Tea": {
+        "price": 20,
+        "desc": "Warm tea. Restores 10 Vitality.",
+        "shop": "Provisioner",
+        "effect": {"vit": 10},
+    },
+    "Qi Pill (small)": {
+        "price": 50,
+        "desc": "A small pill. Restores 10 Ki.",
+        "shop": "Apothecary",
+        "effect": {"ki": 10},
+    },
+    "Muscle Recovery Elixir": {
+        "price": 80,
+        "desc": "Eases sore muscles. Restores 20 Vitality.",
+        "shop": "Apothecary",
+        "effect": {"vit": 20},
+    },
+    "Broken Technique Scroll": {
+        "price": 500,
+        "desc": "Torn scroll with martial insights. +5% Mastery.",
+        "shop": "Shady Dealer",
+        "effect": {"mastery": 5},
+    },
 }
 
 # ── UI ────────────────────────────────────────────────────────

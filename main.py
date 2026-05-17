@@ -205,8 +205,20 @@ async def init_db():
         """)
         print("[DEBUG] init_db: banned_users table ensured")
 
+        # --- UPDATED: inventory table with 'bound' column ---
+        await c.execute("""
+            CREATE TABLE IF NOT EXISTS inventory (
+                user_id INTEGER,
+                item_name TEXT,
+                quantity INTEGER DEFAULT 1,
+                bound INTEGER DEFAULT 0,
+                PRIMARY KEY (user_id, item_name)
+            )
+        """)
+        print("[DEBUG] init_db: inventory table ensured")
+
         # --- Insert default bot_settings if missing (so toggles work) ---
-               default_settings = [
+        default_settings = [
             ("toggle_actions", "True"),
             ("actions_vit_cost_work", "10"),
             ("actions_vit_cost_observe", "10"),
