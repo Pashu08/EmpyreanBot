@@ -145,6 +145,8 @@ async def init_db():
             "teaching_bonus_crit": "INTEGER DEFAULT 0",
             "teaching_bonus_dmg_reduction": "INTEGER DEFAULT 0",
             "teaching_bonus_regen": "INTEGER DEFAULT 0",
+            "daily_give_date": "TEXT",
+            "daily_give_count": "INTEGER DEFAULT 0",
         }
 
         await c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
