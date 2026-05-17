@@ -95,6 +95,8 @@ MSG_CANCELLED = "🧘 Meditation cancelled."
 MSG_RECOVER_COMPLETE = "✨ Meditation complete! You regained **+{vit} Vitality** and **+{ki} Ki**."
 MSG_FOCUS_COMPLETE = "🌀 Focused! Converted **10 Vitality** → **5 Ki**."
 MSG_REST_COMPLETE = "🛌 Rest taken! Restored **10 HP** and **10 Vitality**."
+MSG_FEATURE_DISABLED = "❌ The **{feature}** feature is currently disabled."
+MSG_BANNED = "❌ You are banned from using this bot."
 
 # ==========================================
 # IDEA 7: DEBUG MODE (default value)

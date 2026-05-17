@@ -204,11 +204,13 @@ async def init_db():
         print("[DEBUG] init_db: banned_users table ensured")
 
         # --- Insert default bot_settings if missing (so toggles work) ---
-        default_settings = [
+               default_settings = [
             ("toggle_actions", "True"),
             ("actions_vit_cost_work", "10"),
             ("actions_vit_cost_observe", "10"),
             ("actions_vit_cost_comprehend", "40"),
+            ("toggle_status", "True"),
+            ("toggle_profile", "True"),
         ]
         for key, value in default_settings:
             await c.execute(
