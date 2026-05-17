@@ -147,6 +147,7 @@ async def init_db():
             "teaching_bonus_regen": "INTEGER DEFAULT 0",
             "daily_give_date": "TEXT",
             "daily_give_count": "INTEGER DEFAULT 0",
+            "hidden_techs_unlocked": "TEXT",   # comma-separated list of hidden technique names
         }
 
         await c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
