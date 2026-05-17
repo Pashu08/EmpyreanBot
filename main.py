@@ -97,8 +97,8 @@ class DashboardServer:
             s.connect(("8.8.8.8", 80))
             local_ip = s.getsockname()[0]
             s.close()
-            print(f"[DEBUG] Web dashboard: http://localhost:{config.WEB_DASHBOARD_PORT} (phone)")
-            print(f"[DEBUG] Web dashboard: http://{local_ip}:{config.WEB_DASHBOARD_PORT} (laptop on same Wi-Fi)")
+            print(f"[DEBUG] Web dashboard: http://localhost:{config.WEB_DASHBOARD_PORT}")
+            print(f"[DEBUG] Web dashboard: http://{local_ip}:{config.WEB_DASHBOARD_PORT}")
         except:
             print(f"[DEBUG] Web dashboard: http://localhost:{config.WEB_DASHBOARD_PORT}")
 
@@ -112,10 +112,11 @@ class DashboardServer:
 async def init_db():
     print("[DEBUG] init_db: Started")
     start_time = time.time()
-    async with aiosqlite.connect("murim.db") as conn:
+    # Added timeout parameter to prevent database locks
+    async with aiosqlite.connect("murim.db", timeout=30.0) as conn:
         c = await conn.cursor()
 
-        # --- Users table (existing + new columns for actions.py) ---
+        # --- Users table (existing + new columns) ---
         MASTER_SCHEMA = {
             "user_id": "INTEGER PRIMARY KEY",
             "background": "TEXT",
@@ -137,7 +138,6 @@ async def init_db():
             "prof_req_xp": "INTEGER DEFAULT 1000",
             "combat_mastery": "REAL DEFAULT 0.0",
             "meridian_damage": "TEXT",
-            # === NEW COLUMNS FOR actions.py ===
             "daily_work_date": "TEXT",
             "daily_observe_date": "TEXT",
             "mastery_flags": "TEXT",
@@ -147,7 +147,9 @@ async def init_db():
             "teaching_bonus_regen": "INTEGER DEFAULT 0",
             "daily_give_date": "TEXT",
             "daily_give_count": "INTEGER DEFAULT 0",
-            "hidden_techs_unlocked": "TEXT",   # comma-separated list of hidden technique names
+            "hidden_techs_unlocked": "TEXT",
+            # ADDED: heartbeat_dm column directly in schema
+            "heartbeat_dm": "INTEGER DEFAULT 1",
         }
 
         await c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
@@ -167,7 +169,7 @@ async def init_db():
                         print(f"[DEBUG] init_db: Failed to add {col_name}: {e}")
                         log_error_to_file(f"init_db column add failed: {col_name} - {e}")
 
-        # --- NEW: bot_settings table ---
+        # --- bot_settings table ---
         await c.execute("""
             CREATE TABLE IF NOT EXISTS bot_settings (
                 setting_key TEXT PRIMARY KEY,
@@ -176,7 +178,7 @@ async def init_db():
         """)
         print("[DEBUG] init_db: bot_settings table ensured")
 
-        # --- NEW: admin_permissions table ---
+        # --- admin_permissions table ---
         await c.execute("""
             CREATE TABLE IF NOT EXISTS admin_permissions (
                 user_id INTEGER,
@@ -186,7 +188,7 @@ async def init_db():
         """)
         print("[DEBUG] init_db: admin_permissions table ensured")
 
-        # --- NEW: user_cooldowns table (survives restart) ---
+        # --- user_cooldowns table ---
         await c.execute("""
             CREATE TABLE IF NOT EXISTS user_cooldowns (
                 cooldown_key TEXT PRIMARY KEY,
@@ -195,7 +197,7 @@ async def init_db():
         """)
         print("[DEBUG] init_db: user_cooldowns table ensured")
 
-        # --- NEW: banned_users table ---
+        # --- banned_users table ---
         await c.execute("""
             CREATE TABLE IF NOT EXISTS banned_users (
                 user_id INTEGER PRIMARY KEY,
@@ -206,7 +208,7 @@ async def init_db():
         """)
         print("[DEBUG] init_db: banned_users table ensured")
 
-        # --- UPDATED: inventory table with 'bound' column ---
+        # --- inventory table ---
         await c.execute("""
             CREATE TABLE IF NOT EXISTS inventory (
                 user_id INTEGER,
@@ -218,7 +220,8 @@ async def init_db():
         """)
         print("[DEBUG] init_db: inventory table ensured")
 
-        # --- Insert default bot_settings if missing (so toggles work) ---
+        # --- Insert default bot_settings ---
+        # FIXED: Added missing comma after ("toggle_core", "True")
         default_settings = [
             ("toggle_actions", "True"),
             ("actions_vit_cost_work", "10"),
@@ -228,7 +231,7 @@ async def init_db():
             ("toggle_profile", "True"),
             ("toggle_pavilion", "True"),
             ("toggle_pvp", "True"),
-            ("toggle_core", "True")
+            ("toggle_core", "True"),
             ("toggle_combat", "True")
         ]
         for key, value in default_settings:
@@ -258,8 +261,10 @@ class MurimBot(commands.Bot):
         self.startup_time = time.time()
         self.dashboard = None
         self._shutdown_handled = False
-        self.active_combats = {}  # To track users in combat
-        self.command_cooldowns = {}  # In-memory cooldowns
+        self.active_combats = {}
+        self.command_cooldowns = {}
+        # ADDED: Global meditation tracking set
+        self.is_meditating = set()
 
         super().__init__(
             command_prefix=config.PREFIX,
@@ -280,7 +285,8 @@ class MurimBot(commands.Bot):
         await init_db()
 
         print("🔗 Opening Database Connection...")
-        self.db = await aiosqlite.connect("murim.db")
+        # ADDED: timeout parameter to prevent database locks
+        self.db = await aiosqlite.connect("murim.db", timeout=30.0)
         print("[DEBUG] setup_hook: Database connection opened")
 
         if config.WEB_DASHBOARD_ENABLED:
@@ -296,8 +302,16 @@ class MurimBot(commands.Bot):
         cogs_loaded = 0
         cogs_failed = []
 
+        # Ensure cogs directory exists
+        if not os.path.exists("./cogs"):
+            print("[WARN] No 'cogs' directory found! Creating empty cogs directory.")
+            os.makedirs("./cogs")
+            # Create __init__.py to make it a proper package
+            with open("./cogs/__init__.py", "w") as f:
+                f.write("# Cogs package\n")
+
         for filename in os.listdir("./cogs"):
-            if filename.endswith(".py"):
+            if filename.endswith(".py") and filename != "__init__.py":
                 try:
                     print(f"[DEBUG] setup_hook: Attempting to load cogs.{filename[:-3]}")
                     await self.load_extension(f"cogs.{filename[:-3]}")
@@ -352,6 +366,13 @@ class MurimBot(commands.Bot):
         print("Status: Database Sync Complete")
         print("------------------------------------------")
         print("[DEBUG] on_ready: Bot is fully ready")
+
+        # Sync slash commands with Discord
+        try:
+            synced = await self.tree.sync()
+            print(f"[DEBUG] Synced {len(synced)} slash commands")
+        except Exception as e:
+            print(f"[WARN] Failed to sync slash commands: {e}")
 
         if config.STARTUP_ANNOUNCE_CHANNEL_ID:
             try:

@@ -9,12 +9,12 @@ from utils.helpers import get_max_stats
 
 log = logging.getLogger(__name__)
 
-
 class Mechanics(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.meditating: set[int] = set()
-        # Initialise bot-level set once, right here, so cancel never crashes
+        self.meditation_start_times: dict[int, datetime.datetime] = {}  # ADDED: Track when meditation started
+        # Initialise bot-level set once, so cancel never crashes
         if not hasattr(self.bot, "is_meditating"):
             self.bot.is_meditating = set()
         self.recover_cooldowns: dict[int, datetime.datetime] = {}
@@ -28,20 +28,13 @@ class Mechanics(commands.Cog):
 
     async def _delayed_start(self):
         await self.bot.wait_until_ready()
-        await self._init_db_column()
+        # REMOVED: _init_db_column call since heartbeat_dm is now in MASTER_SCHEMA
+        # await self._init_db_column()  # No longer needed
         self.heartbeat.start()
         log.info("Mechanics cog ready; heartbeat started.")
 
-    async def _init_db_column(self):
-        db = self.bot.db
-        async with db.execute("PRAGMA table_info(users)") as cur:
-            cols = [row[1] for row in await cur.fetchall()]
-        if "heartbeat_dm" not in cols:
-            await db.execute(
-                "ALTER TABLE users ADD COLUMN heartbeat_dm INTEGER DEFAULT 1"
-            )
-            await db.commit()
-            log.info("Added heartbeat_dm column to users table.")
+    # REMOVED: _init_db_column method entirely (lines 43-52 original)
+    # The heartbeat_dm column is now created by main.py's MASTER_SCHEMA
 
     def cog_unload(self):
         self.heartbeat.cancel()
@@ -58,6 +51,9 @@ class Mechanics(commands.Cog):
         ) as cursor:
             users = await cursor.fetchall()
 
+        # ADDED: Track count for rate limiting
+        dm_count = 0
+        
         for u_id, current_hp, current_vit, rank, dm_enabled in users:
             if "Second-Rate" in rank:
                 regen = 100
@@ -74,7 +70,7 @@ class Mechanics(commands.Cog):
             vit_gain = new_vit - current_vit
 
             if hp_gain == 0 and vit_gain == 0:
-                continue  # already at max, skip DB write and DM entirely
+                continue
 
             await db.execute(
                 "UPDATE users SET hp = ?, vitality = ? WHERE user_id = ?",
@@ -85,6 +81,11 @@ class Mechanics(commands.Cog):
                 user_obj = self.bot.get_user(u_id)
                 if user_obj:
                     try:
+                        # ADDED: Rate limit protection - delay every 5 DMs
+                        dm_count += 1
+                        if dm_count % 5 == 0:
+                            await asyncio.sleep(1)
+                        
                         embed = discord.Embed(
                             title="🌿 Heavenly Recovery",
                             description=(
@@ -99,6 +100,10 @@ class Mechanics(commands.Cog):
                         await user_obj.send(embed=embed)
                     except discord.Forbidden:
                         pass
+                    except discord.HTTPException as e:
+                        if e.status == 429:  # Rate limited
+                            await asyncio.sleep(2)
+                            log.warning(f"Heartbeat DM rate limited for user {u_id}")
 
         await db.commit()
 
@@ -199,6 +204,7 @@ class Mechanics(commands.Cog):
 
         # Mark as meditating
         self.meditating.add(user_id)
+        self.meditation_start_times[user_id] = self._utcnow()  # ADDED: Track start time
         self.bot.is_meditating.add(user_id)
 
         msg = await ctx.send(
@@ -218,7 +224,7 @@ class Mechanics(commands.Cog):
             await asyncio.sleep(10)
             elapsed += 10
 
-            if user_id not in self.meditating:  # !cancel was called
+            if user_id not in self.meditating:  # cancel was called
                 cancelled = True
                 break
 
@@ -237,6 +243,7 @@ class Mechanics(commands.Cog):
 
         # Always clean up state (may already be removed by cancel)
         self.meditating.discard(user_id)
+        self.meditation_start_times.pop(user_id, None)  # ADDED: Clean up start time
         self.bot.is_meditating.discard(user_id)
 
         if cancelled:
@@ -296,7 +303,23 @@ class Mechanics(commands.Cog):
     async def cancel_meditation(self, ctx):
         user_id = ctx.author.id
         if user_id in self.meditating:
+            # ADDED: Penalty for early cancellation
+            if user_id in self.meditation_start_times:
+                elapsed = (self._utcnow() - self.meditation_start_times[user_id]).total_seconds()
+                if elapsed < 30:  # Cancelled within first 30 seconds
+                    # Apply 2-minute cooldown penalty
+                    self.recover_cooldowns[user_id] = self._utcnow() + datetime.timedelta(minutes=2)
+                    await ctx.send(
+                        embed=discord.Embed(
+                            title="⚠️ Early Cancellation Penalty",
+                            description="Cancelling within 30 seconds applies a 2-minute cooldown!",
+                            color=0xF1C40F,
+                        ),
+                        ephemeral=True,
+                    )
+            
             self.meditating.discard(user_id)
+            self.meditation_start_times.pop(user_id, None)  # ADDED: Clean up start time
             self.bot.is_meditating.discard(user_id)
             await ctx.send(
                 embed=discord.Embed(
@@ -363,7 +386,9 @@ class Mechanics(commands.Cog):
         vit_cap = max_stats["max_vit"]
         hp_cap  = max_stats["max_hp"]
 
-        regen = 100 if "Second-Rate" in rank else 50 if "Third-Rate" in rank else 25
+        # FIXED: Use HEARTBEAT_REGEN from constants for consistency
+        from utils.constants import HEARTBEAT_REGEN
+        regen = HEARTBEAT_REGEN.get(rank, 25)
 
         ki_progress = int((ki / ki_cap) * 100) if ki_cap else 0
         bar_filled  = int(ki_progress / 10)
@@ -536,7 +561,6 @@ class Mechanics(commands.Cog):
                 color=0x2ECC71,
             )
         )
-
 
 async def setup(bot):
     await bot.add_cog(Mechanics(bot))

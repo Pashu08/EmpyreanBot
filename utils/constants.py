@@ -1,6 +1,17 @@
+"""
+constants.py - Game data and constants for Empyrean Bot
+All game balance numbers are defined here for easy tuning.
+"""
+
+import logging
+log = logging.getLogger(__name__)
+
 print("[DEBUG] constants.py: Loading Murim game data...")
 
-# ── RANKS (ordered, index = rank_id) ──────────────────────────
+# ==========================================
+# RANKS (ordered, index = rank_id)
+# ==========================================
+
 RANKS = [
     "The Bound (Mortal)",
     "Third-Rate Warrior",
@@ -9,7 +20,10 @@ RANKS = [
     "Peak Master",
 ]
 
-# ── PER-RANK STATS ─────────────────────────────────────────────
+# ==========================================
+# PER-RANK STATS
+# ==========================================
+
 RANK_STATS = {
     "The Bound (Mortal)":   {"vit_cap": 100,  "hp_cap": 100,  "ki_cap": 100,   "atk": 8,   "tech_atk": 15},
     "Third-Rate Warrior":   {"vit_cap": 300,  "hp_cap": 300,  "ki_cap": 1000,  "atk": 25,  "tech_atk": 50},
@@ -18,15 +32,22 @@ RANK_STATS = {
     "Peak Master":          {"vit_cap": 2000, "hp_cap": 2000, "ki_cap": 15000, "atk": 250, "tech_atk": 450},
 }
 
-# ── BREAKTHROUGH REQUIREMENTS ──────────────────────────────────
+# ==========================================
+# BREAKTHROUGH REQUIREMENTS
+# ==========================================
+
 BREAKTHROUGH_KI = {
     "The Bound (Mortal)":  100,
     "Third-Rate Warrior":  1000,
     "Second-Rate Warrior": 3000,
     "First-Rate Warrior":  7500,
+    # Peak Master has no breakthrough (max rank)
 }
 
-# ── HEARTBEAT (every 10 min) ───────────────────────────────────
+# ==========================================
+# HEARTBEAT REGENERATION (every 20 minutes)
+# ==========================================
+
 HEARTBEAT_REGEN = {
     "The Bound (Mortal)":  25,
     "Third-Rate Warrior":  50,
@@ -35,7 +56,10 @@ HEARTBEAT_REGEN = {
     "Peak Master":         250,
 }
 
-# ── AFK RATES (per hour) ──────────────────────────────────────
+# ==========================================
+# AFK RATES (per hour)
+# ==========================================
+
 AFK_KI_PER_HOUR = {
     "The Bound (Mortal)":  150,
     "Third-Rate Warrior":  300,
@@ -43,18 +67,52 @@ AFK_KI_PER_HOUR = {
     "First-Rate Warrior":  1050,
     "Peak Master":         1500,
 }
-AFK_MASTERY_PER_HOUR = 0.5   # base, Instructor gets * 1.15
 
-# ── ACTIONS ───────────────────────────────────────────────────
-WORK_VIT_COST    = 10
+AFK_MASTERY_PER_HOUR = 0.5   # base, Instructor profession gets * 1.15
+
+# ==========================================
+# RECOVERY COMMAND VALUES
+# ==========================================
+
+RECOVER_VIT_GAIN_BASE = 25
+RECOVER_KI_GAIN_BASE = 5
+RECOVER_VIT_HERMIT_BONUS = 35  # +10 extra
+RECOVER_KI_HERMIT_BONUS = 15   # +10 extra
+RECOVER_DURATION_SECONDS = 60
+RECOVER_COOLDOWN_MINUTES = 5
+
+# ==========================================
+# FOCUS COMMAND VALUES
+# ==========================================
+
+FOCUS_VIT_COST = 10
+FOCUS_KI_GAIN = 5
+FOCUS_COOLDOWN_MINUTES = 5
+
+# ==========================================
+# REST COMMAND VALUES
+# ==========================================
+
+REST_HP_GAIN = 10
+REST_VIT_GAIN = 10
+REST_COOLDOWN_HOURS = 1
+
+# ==========================================
+# ACTION COSTS & COOLDOWNS
+# ==========================================
+
+WORK_VIT_COST = 10
 OBSERVE_VIT_COST = 10
 COMPREHEND_VIT_COST = 40
 RECOVER_VIT_GAIN = 25
 RECOVER_COOLDOWN = 300   # seconds
-HUNT_COOLDOWN    = 600   # seconds
+HUNT_COOLDOWN = 600      # seconds
 PVP_DAMAGE_RANGE = (10, 25)   # min, max damage per strike
 
-# ── COMBAT ENEMIES ────────────────────────────────────────────
+# ==========================================
+# COMBAT ENEMIES
+# ==========================================
+
 ENEMIES = {
     "Third-Rate Warrior":  {"name": "Spirit Wolf",       "hp": 100,  "atk": 15,  "reward": (30, 60),   "color": 0x2ecc71},
     "Second-Rate Warrior": {"name": "Shadow Tiger",      "hp": 250,  "atk": 45,  "reward": (60, 100),  "color": 0xe67e22},
@@ -62,7 +120,10 @@ ENEMIES = {
     "Peak Master":         {"name": "Ancient Bloodfiend","hp": 850,  "atk": 135, "reward": (200, 400), "color": 0x582f0e},
 }
 
-# ── TECHNIQUES ────────────────────────────────────────────────
+# ==========================================
+# TECHNIQUES
+# ==========================================
+
 TECHNIQUES = {
     "Flowing Cloud Steps": {
         "description": "Focus: Evasion & Agility",
@@ -94,36 +155,51 @@ TECHNIQUES = {
     },
 }
 
-# ── BACKGROUNDS ───────────────────────────────────────────────
+# ==========================================
+# BACKGROUNDS
+# ==========================================
+
 BACKGROUNDS = {
     "Laborer": {
         "emoji": "⚒️",
         "item": "Torn Page",
         "tagline": "One who finds wisdom in hard work.",
         "perk": "15% lower Ki requirement for breakthrough. 10% chance of Mastery gain from !work.",
+        "breakthrough_discount": 0.85,
+        "mastery_chance": 0.10,
     },
     "Outcast": {
         "emoji": "🌑",
         "item": "Black Coin",
         "tagline": "One who walks the shadows and forbidden markets.",
         "perk": "Unlocks the Shady Dealer stall in the Bazaar.",
+        "unlocks_shady_dealer": True,
     },
     "Hermit": {
         "emoji": "🌿",
         "item": "Glowing Fruit",
         "tagline": "One who lives in harmony with natural spirits.",
-        "perk": "+15% HP/Vitality AFK regen rate.",
+        "perk": "+15% HP/Vitality AFK regen rate. +10 Vitality/Ki from meditation.",
+        "afk_bonus": 1.15,
+        "recover_vit_bonus": 10,
+        "recover_ki_bonus": 10,
     },
 }
 
-# ── ITEM MUTATIONS ────────────────────────────────────────────
+# ==========================================
+# ITEM MUTATIONS (for background items)
+# ==========================================
+
 ITEM_MUTATIONS = {
     "Torn Page":     "Jade Scripture",
     "Black Coin":    "Shadow Seal",
     "Glowing Fruit": "Verdant Bone",
 }
 
-# ── SHOP ITEMS ────────────────────────────────────────────────
+# ==========================================
+# SHOP ITEMS
+# ==========================================
+
 SHOP_ITEMS = {
     "Spirit Gathering Dan": {
         "price": 100,
@@ -155,7 +231,6 @@ SHOP_ITEMS = {
         "shop": "Shady Dealer",
         "effect": {"ki": 100, "hp": -50},
     },
-    # === NEW SHOP ITEMS ===
     "Iron Bandage": {
         "price": 25,
         "desc": "Rough bandage. Restores 10 HP.",
@@ -188,20 +263,30 @@ SHOP_ITEMS = {
     },
 }
 
-# ── UI ────────────────────────────────────────────────────────
-COLOR_MAIN   = 0x700000
-COLOR_WIN    = 0x00FF00
-COLOR_LOSE   = 0x000000
-COLOR_GOLD   = 0xFFD700
-COLOR_TEAL   = 0x00AABB
+# ==========================================
+# UI COLORS
+# ==========================================
+
+COLOR_MAIN   = 0x700000  # Dark red/burgundy
+COLOR_WIN    = 0x00FF00  # Green
+COLOR_LOSE   = 0x000000  # Black
+COLOR_GOLD   = 0xFFD700  # Gold
+COLOR_TEAL   = 0x00AABB  # Teal blue
+COLOR_PURPLE = 0x9B59B6  # Added for meditation
+COLOR_GREEN  = 0x2ECC71  # Added for success
+COLOR_ORANGE = 0xF1C40F  # Added for warnings
+COLOR_RED    = 0xE74C3C  # Added for errors
+
+# ==========================================
+# CULTIVATION STAGES
+# ==========================================
 
 STAGES = ["Initial", "Early", "Middle", "Late", "Peak"]
 
 # ==========================================
-# NEW MURIM IDEAS (added)
+# RANDOM MURIM EVENTS
 # ==========================================
 
-# ── RANDOM MURIM EVENTS (for work, observe, hunt, etc.) ───────
 MURIM_EVENTS = [
     ("🍂 A wandering master shares a breath technique.", {"ki": 15}),
     ("📜 You find an old martial arts scroll in a cave.", {"mastery": 2.0}),
@@ -217,7 +302,10 @@ MURIM_EVENTS = [
     ("🏔️ You discover a hidden spring. +25 Vitality.", {"vit": 25}),
 ]
 
-# ── FACTIONS (Reputation system) ─────────────────────────────
+# ==========================================
+# FACTIONS
+# ==========================================
+
 FACTIONS = {
     "Orthodox": {
         "desc": "Righteous sects like Mount Hua, Southern Edge, Beggar Sect.",
@@ -245,7 +333,10 @@ FACTIONS = {
     },
 }
 
-# ── HIDDEN TECHNIQUES (unlocked by mastering specific techniques) ──
+# ==========================================
+# HIDDEN TECHNIQUES
+# ==========================================
+
 HIDDEN_TECHNIQUES = {
     # Example structure – add your own hidden techniques here later
     # "Flowing Cloud Shadow Step": {
@@ -254,5 +345,14 @@ HIDDEN_TECHNIQUES = {
     #     "combat_effect": "teleport_crit",
     # },
 }
+
+# ==========================================
+# VALIDATION SETS (ADDED for helpers.py)
+# ==========================================
+
+VALID_RANKS = set(RANKS)
+VALID_BACKGROUNDS = set(BACKGROUNDS.keys())
+VALID_TECHNIQUES = set(TECHNIQUES.keys())
+VALID_FACTIONS = set(FACTIONS.keys())
 
 print("[DEBUG] constants.py: Loaded Murim game data successfully")
