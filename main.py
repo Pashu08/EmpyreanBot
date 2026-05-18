@@ -222,7 +222,7 @@ async def init_db():
 
         # --- Insert default bot_settings ---
         # FIXED: Added missing comma after ("toggle_core", "True")
-                default_settings = [
+        default_settings = [
             ("toggle_actions", "True"),
             ("actions_vit_cost_work", "10"),
             ("actions_vit_cost_observe", "10"),
