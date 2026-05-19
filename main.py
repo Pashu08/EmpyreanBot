@@ -13,11 +13,24 @@ import json
 print("[DEBUG] main.py: Starting imports...")
 
 # ==========================================
-# ERROR LOGGING TO FILE
+# ERROR LOGGING TO FILE (with rotation)
 # ==========================================
+MAX_LOG_SIZE = 5 * 1024 * 1024  # 5 MB
+
+def rotate_log_file(log_path):
+    """Rotate log file if it exceeds max size."""
+    if os.path.exists(log_path) and os.path.getsize(log_path) > MAX_LOG_SIZE:
+        old_log = log_path.replace(".log", "_old.log")
+        if os.path.exists(old_log):
+            os.remove(old_log)
+        os.rename(log_path, old_log)
+
 def log_error_to_file(error_message):
+    """Append error to bot_errors.log, rotate if too large."""
+    log_path = "bot_errors.log"
     try:
-        with open("bot_errors.log", "a", encoding="utf-8") as f:
+        rotate_log_file(log_path)
+        with open(log_path, "a", encoding="utf-8") as f:
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             f.write(f"[{timestamp}] {error_message}\n")
     except:
@@ -221,8 +234,7 @@ async def init_db():
         print("[DEBUG] init_db: inventory table ensured")
 
         # --- Insert default bot_settings ---
-        # FIXED: Added missing comma after ("toggle_core", "True")
-                default_settings = [
+        default_settings = [
             ("toggle_actions", "True"),
             ("actions_vit_cost_work", "10"),
             ("actions_vit_cost_observe", "10"),
@@ -233,7 +245,11 @@ async def init_db():
             ("toggle_pvp", "True"),
             ("toggle_core", "True"),
             ("toggle_combat", "True"),
-            ("toggle_mechanics", "True")
+            ("toggle_mechanics", "True"),
+            ("toggle_cultivation", "True"),
+            ("toggle_help", "True"),
+            ("toggle_shop", "True"),
+            ("toggle_professions", "True"),
         ]
         for key, value in default_settings:
             await c.execute(

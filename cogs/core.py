@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 import datetime
 from utils.helpers import format_embed_color
-from utils.db import get_bot_setting, is_user_banned, get_user_stat, update_user_stat
+from utils.db import get_bot_setting, is_user_banned, get_user_stat, update_user_stat, add_item
 from utils.constants import BACKGROUNDS, ITEM_MUTATIONS
 import config
 
@@ -19,11 +19,23 @@ class StartMenu(discord.ui.View):
 
     async def handle_start(self, interaction, background_name):
         """Create a new character with the chosen background."""
+        print(f"[DEBUG] core.StartMenu.handle_start: User {interaction.user.id} chose {background_name}")
+
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("❌ This destiny is not yours to claim.", ephemeral=True)
 
+        # Check if user is banned
+        if await is_user_banned(self.bot.db, interaction.user.id):
+            return await interaction.response.send_message(config.MSG_BANNED, ephemeral=True)
+
+        # Check if feature is enabled
+        enabled = await get_bot_setting(self.bot.db, "toggle_core", True)
+        if not enabled:
+            return await interaction.response.send_message(config.MSG_FEATURE_DISABLED.format(feature="Character Creation"), ephemeral=True)
+
         db = self.bot.db
-        # Check if user already exists (async)
+
+        # Check if user already exists
         async with db.execute("SELECT user_id FROM users WHERE user_id = ?", (interaction.user.id,)) as cursor:
             existing = await cursor.fetchone()
         if existing:
@@ -32,10 +44,9 @@ class StartMenu(discord.ui.View):
         # Get background data from constants
         bg_data = BACKGROUNDS.get(background_name, {})
         item_name = bg_data.get("item", "Torn Page")
-        # Check if item mutates (not needed at start, but for consistency)
-        # Starting stats from config
         now = datetime.datetime.now().isoformat()
 
+        # Insert into users table
         await db.execute(
             """INSERT INTO users (
                 user_id, background, rank, item_id, taels, ki, vitality, hp, stage, last_refresh
@@ -53,7 +64,13 @@ class StartMenu(discord.ui.View):
                 now
             )
         )
+
+        # Add starting item to inventory (bound = 1, cannot be sold/traded)
+        await add_item(db, interaction.user.id, item_name, 1, bound=True)
+
         await db.commit()
+
+        print(f"[DEBUG] core.StartMenu.handle_start: Character created for {interaction.user.id} with item {item_name}")
 
         # Success embed
         success_embed = discord.Embed(
@@ -68,12 +85,12 @@ class StartMenu(discord.ui.View):
         )
         await interaction.response.edit_message(content=None, embed=success_embed, view=None)
 
-        # Send tutorial popup (feature #6)
-        await self._send_tutorial(interaction.user)
+        # Send tutorial popup (with fallback if DM fails)
+        await self._send_tutorial(interaction.user, interaction)
         self.stop()
 
-    async def _send_tutorial(self, user):
-        """Send a tutorial popup to the new player."""
+    async def _send_tutorial(self, user, interaction):
+        """Send a tutorial popup to the new player. Falls back to channel if DM fails."""
         embed = discord.Embed(
             title="📜 Your Journey Begins",
             description=(
@@ -98,9 +115,11 @@ class StartMenu(discord.ui.View):
         )
         try:
             await user.send(embed=embed)
+            print(f"[DEBUG] core.StartMenu._send_tutorial: DM sent to {user.id}")
         except discord.Forbidden:
-            # If DMs are closed, send in the channel (ephemeral)
-            pass  # The start command is already in a channel, but we can't send ephemeral from here easily
+            # Fallback: send in the channel (ephemeral)
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            print(f"[DEBUG] core.StartMenu._send_tutorial: DM failed, sent in channel for {user.id}")
 
     @discord.ui.button(label="Laborer", style=discord.ButtonStyle.green, emoji="⚒️")
     async def laborer(self, interaction: discord.Interaction, button: discord.ui.Button):

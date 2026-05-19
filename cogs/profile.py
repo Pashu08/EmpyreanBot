@@ -1,9 +1,9 @@
 import discord
 from discord.ext import commands
 import datetime
-from utils.db import fetch_user, get_bot_setting, is_user_banned, get_inventory
-from utils.helpers import format_embed_color, get_max_stats
-from utils.constants import BACKGROUNDS, TECHNIQUES
+from utils.db import get_bot_setting, is_user_banned
+from utils.helpers import format_embed_color
+from utils.constants import BACKGROUNDS
 import config
 
 print("[DEBUG] profile.py: Loading Profile cog...")
@@ -24,19 +24,24 @@ class Profile(commands.Cog):
         bg = BACKGROUNDS.get(bg_name, {})
         return bg.get("perk", "No special perk.")
 
-    async def _get_daily_bonus_status(self, user_id):
-        """Return (work_available, observe_available, reset_timestamp_str)."""
+    def _get_background_item(self, bg_name):
+        """Return the starting item for a background."""
+        bg = BACKGROUNDS.get(bg_name, {})
+        return bg.get("item", "Unknown item")
+
+    async def _get_daily_bonus_status(self, user_id, user_data):
+        """Return (work_available, observe_available, reset_timestamp_str) using pre-fetched data."""
+        print(f"[DEBUG] profile._get_daily_bonus_status: user_id={user_id}")
         now = datetime.datetime.now()
         today = now.date().isoformat()
-        work_date = await self.bot.db.execute("SELECT daily_work_date FROM users WHERE user_id=?", (user_id,))
-        work_row = await work_date.fetchone()
-        work_available = work_row is None or work_row[0] != today
 
-        observe_date = await self.bot.db.execute("SELECT daily_observe_date FROM users WHERE user_id=?", (user_id,))
-        observe_row = await observe_date.fetchone()
-        observe_available = observe_row is None or observe_row[0] != today
+        work_date = user_data.get('daily_work_date')
+        observe_date = user_data.get('daily_observe_date')
 
-        # Calculate next reset time (midnight UTC? Or local? We'll use midnight UTC for simplicity)
+        work_available = work_date is None or work_date != today
+        observe_available = observe_date is None or observe_date != today
+
+        # Calculate next reset time (midnight UTC)
         next_reset = datetime.datetime.combine(now.date() + datetime.timedelta(days=1), datetime.time.min)
         reset_delta = next_reset - now
         hours = int(reset_delta.total_seconds() // 3600)
@@ -44,32 +49,32 @@ class Profile(commands.Cog):
         reset_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
         return work_available, observe_available, reset_str
 
-    async def _get_milestone_progress(self, user_id, technique):
-        """Return (reached_count, total_milestones, milestone_list)."""
+    async def _get_milestone_progress(self, technique, mastery_flags):
+        """Return (reached_count, total_milestones) using pre-fetched data."""
+        print(f"[DEBUG] profile._get_milestone_progress: technique={technique}")
         if technique == "None":
-            return 0, 0, []
-        flags = await self.bot.db.execute("SELECT mastery_flags FROM users WHERE user_id=?", (user_id,))
-        row = await flags.fetchone()
-        flags_str = row[0] if row else ""
-        # format: "Flowing Cloud Steps:25,50" etc.
-        reached = []
-        if flags_str:
-            for part in flags_str.split(","):
-                if part.startswith(f"{technique}:"):
-                    milestone = int(part.split(":")[1])
-                    reached.append(milestone)
-        total = [25, 50, 75, 100]
-        return len(reached), len(total), reached
+            return 0, 0
 
-    async def _get_hidden_technique_status(self, user_id, technique):
-        """If technique mastered to 100%, return hidden technique name, else None."""
+        reached = []
+        if mastery_flags:
+            try:
+                for part in mastery_flags.split(","):
+                    if part.startswith(f"{technique}:"):
+                        milestone = int(part.split(":")[1])
+                        reached.append(milestone)
+            except (ValueError, IndexError):
+                print(f"[DEBUG] profile._get_milestone_progress: Error parsing mastery_flags for {technique}")
+
+        total_milestones = 4  # 25, 50, 75, 100
+        return len(reached), total_milestones
+
+    async def _get_hidden_technique_status(self, technique, mastery_flags):
+        """Return hidden technique name or None if not mastered."""
+        print(f"[DEBUG] profile._get_hidden_technique_status: technique={technique}")
         if technique == "None":
             return None
-        flags = await self.bot.db.execute("SELECT mastery_flags FROM users WHERE user_id=?", (user_id,))
-        row = await flags.fetchone()
-        flags_str = row[0] if row else ""
-        if f"{technique}:100" in flags_str.split(","):
-            # Map technique to hidden technique (from actions.py logic)
+
+        if mastery_flags and f"{technique}:100" in mastery_flags.split(","):
             hidden_map = {
                 "Flowing Cloud Steps": "Flowing Cloud Shadow Step",
                 "Swift Wind Kick": "Swift Hurricane Kick",
@@ -78,6 +83,22 @@ class Profile(commands.Cog):
             }
             return hidden_map.get(technique, "Unknown hidden technique")
         return None
+
+    async def _get_inventory_summary(self, user_id):
+        """Return (total_quantity, unique_count)."""
+        print(f"[DEBUG] profile._get_inventory_summary: user_id={user_id}")
+        db = self.bot.db
+        total_qty = 0
+        unique_count = 0
+        try:
+            async with db.execute("SELECT quantity FROM inventory WHERE user_id = ?", (user_id,)) as cursor:
+                rows = await cursor.fetchall()
+                for row in rows:
+                    total_qty += row[0]
+                    unique_count += 1
+        except Exception as e:
+            print(f"[DEBUG] profile._get_inventory_summary: Error - {e}")
+        return total_qty, unique_count
 
     @commands.hybrid_command(name="profile", aliases=["prof"], description="View detailed character sheet.")
     async def profile(self, ctx, member: discord.Member = None):
@@ -92,44 +113,74 @@ class Profile(commands.Cog):
         target = member or ctx.author
         db = self.bot.db
 
-        user_data = await fetch_user(db, target.id)
-        if not user_data:
+        # OPTIMIZED: Single query to fetch all user data
+        async with db.execute("""
+            SELECT background, taels, active_tech, profession,
+                   daily_work_date, daily_observe_date, mastery_flags
+            FROM users WHERE user_id = ?
+        """, (target.id,)) as cursor:
+            row = await cursor.fetchone()
+
+        if not row:
             return await ctx.send(config.MSG_NOT_REGISTERED, ephemeral=True)
 
-        bg = user_data.get('background', 'Unknown')
+        bg, taels, active_tech, profession, work_date, observe_date, mastery_flags = row
+
+        # Fetch inventory summary
+        total_items, unique_items = await self._get_inventory_summary(target.id)
+
+        # Get background perk and item
         perk = self._get_background_perk(bg)
+        bg_item = self._get_background_item(bg)
 
         # Daily bonus status
-        work_avail, observe_avail, reset_str = await self._get_daily_bonus_status(target.id)
+        user_data = {
+            'daily_work_date': work_date,
+            'daily_observe_date': observe_date
+        }
+        work_avail, observe_avail, reset_str = await self._get_daily_bonus_status(target.id, user_data)
         daily_line = f"Work: {'✅' if work_avail else '❌'} | Observe: {'✅' if observe_avail else '❌'} (Reset in {reset_str})"
 
         # Mastery milestone progress
-        tech = user_data.get('active_tech', 'None')
-        reached, total, _ = await self._get_milestone_progress(target.id, tech)
-        milestone_line = f"{tech}: {reached}/{total} milestones" if tech != "None" else "No technique selected"
+        reached, total = await self._get_milestone_progress(active_tech, mastery_flags)
+        if active_tech != "None":
+            milestone_line = f"{active_tech}: {reached}/{total} milestones"
+        else:
+            milestone_line = "No technique selected"
 
-        # Hidden technique
-        hidden = await self._get_hidden_technique_status(target.id, tech)
-        hidden_line = f"**{hidden}**" if hidden else "None yet. Reach 100% mastery to unlock."
+        # Hidden technique (mysterious hint, no spoiler)
+        hidden = await self._get_hidden_technique_status(active_tech, mastery_flags)
+        if hidden:
+            hidden_line = f"**{hidden}** (discovered!)"
+        elif active_tech != "None" and reached >= 3:
+            # Player has 75%+ mastery, hint that something is near
+            hidden_line = "*You feel a deeper power within this technique...*"
+        elif active_tech != "None":
+            hidden_line = "*The true depth of this technique remains hidden...*"
+        else:
+            hidden_line = "*No technique selected.*"
 
-        # Inventory unique count
-        inv = await get_inventory(db, target.id)
-        inv_count = len(inv)
+        # Profession display
+        profession_line = profession if profession and profession != "None" else "None"
 
         # Faction placeholder
         factions = "Orthodox: 0 | Unorthodox: 0 | Demonic Cult: 0 (coming soon)"
 
+        # Build embed
         embed = discord.Embed(
             title=f"📜 Profile: {target.name}",
             color=format_embed_color("teal")
         )
         embed.set_thumbnail(url=target.display_avatar.url)
 
+        embed.add_field(name="💰 Wealth", value=f"{taels} Taels", inline=True)
         embed.add_field(name="Background", value=f"**{bg}**\n{perk}", inline=False)
+        embed.add_field(name="Background Item", value=bg_item, inline=True)
+        embed.add_field(name="Profession", value=profession_line, inline=True)
         embed.add_field(name="Daily Bonuses", value=daily_line, inline=False)
         embed.add_field(name="Mastery Milestones", value=milestone_line, inline=False)
         embed.add_field(name="Hidden Technique", value=hidden_line, inline=False)
-        embed.add_field(name="Inventory", value=f"{inv_count} unique items", inline=True)
+        embed.add_field(name="Inventory", value=f"{total_items} items ({unique_items} types)", inline=True)
         embed.add_field(name="Faction Standings", value=factions, inline=False)
 
         embed.set_footer(text="Use `!stats` for core cultivation stats.")
