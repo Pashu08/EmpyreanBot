@@ -7,12 +7,11 @@ import config
 print("[DEBUG] help.py: Loading Help cog...")
 
 # ==========================================
-# HELP DROPDOWN MENU
+# HELP DROPDOWN MENU (No admin category)
 # ==========================================
 class HelpSelect(discord.ui.Select):
-    def __init__(self, member_id, is_admin):
+    def __init__(self, member_id):
         self.member_id = member_id
-        self.is_admin = is_admin
 
         options = [
             discord.SelectOption(label="Genesis & Basics", description="Start your journey & core stats.", emoji="🏁"),
@@ -21,9 +20,6 @@ class HelpSelect(discord.ui.Select):
             discord.SelectOption(label="Inventory & Shop", description="Manage items and visit the market.", emoji="🎒"),
             discord.SelectOption(label="Daily Actions & Recovery", description="Work, meditation, and rest.", emoji="🏮"),
         ]
-
-        if is_admin:
-            options.append(discord.SelectOption(label="⚙️ Admin Commands", description="Bot management and configuration.", emoji="🔧"))
 
         super().__init__(placeholder="Choose a category to study...", min_values=1, max_values=1, options=options)
 
@@ -83,28 +79,14 @@ class HelpSelect(discord.ui.Select):
                 "**`!rest`** — Instantly restore HP and Vitality.\n"
                 "**`!toggle_dm`** — Enable/disable heartbeat DMs."
             )
-        elif self.values[0] == "⚙️ Admin Commands" and self.is_admin:
-            embed.title = "🔧 Admin Commands"
-            embed.description = (
-                "**Player Management:**\n"
-                "`!reset @user` `!setki` `!settaels` `!setmastery` `!setcombat`\n"
-                "`!fixmeridians @user` `!refill @user`\n\n"
-                "**Configuration:**\n"
-                "`!toggle <feature>` `!set_cooldown` `!set_emoji` `!set_message`\n"
-                "`!debug <on/off>` `!settings`\n\n"
-                "**System:**\n"
-                "`!sync` `!pulse` `!promote` `!demote`\n"
-                "`!allow @user <perm>` `!deny @user <perm>` `!perms @user`\n"
-                "`!ban @user <reason>` `!unban @user`"
-            )
 
         embed.set_footer(text="The heavens watch every step you take.")
         await interaction.response.edit_message(embed=embed)
 
 class HelpView(discord.ui.View):
-    def __init__(self, member_id, is_admin):
+    def __init__(self, member_id):
         super().__init__(timeout=60)
-        self.add_item(HelpSelect(member_id, is_admin))
+        self.add_item(HelpSelect(member_id))
 
 # ==========================================
 # MAIN COG
@@ -115,12 +97,6 @@ class Help(commands.Cog):
         if bot.get_command('help'):
             bot.remove_command('help')
         print("[DEBUG] Help cog initialized")
-
-    async def _has_permission(self, user_id, permission):
-        """Check if a user has a specific permission."""
-        db = self.bot.db
-        async with db.execute("SELECT 1 FROM admin_permissions WHERE user_id = ? AND permission = ?", (user_id, permission)) as cursor:
-            return await cursor.fetchone() is not None
 
     async def _is_feature_enabled(self, ctx):
         enabled = await get_bot_setting(self.bot.db, "toggle_help", True)
@@ -136,10 +112,6 @@ class Help(commands.Cog):
         if not await self._is_feature_enabled(ctx):
             return
 
-        is_admin = await self._has_permission(ctx.author.id, "system") or \
-                   await self._has_permission(ctx.author.id, "config_manage") or \
-                   await self._has_permission(ctx.author.id, "player_manage")
-
         embed = discord.Embed(
             title="📜 The Path of the Bound: Complete Manual",
             description=(
@@ -149,7 +121,7 @@ class Help(commands.Cog):
             ),
             color=format_embed_color("main")
         )
-        view = HelpView(ctx.author.id, is_admin)
+        view = HelpView(ctx.author.id)
         await ctx.send(embed=embed, view=view)
 
 async def setup(bot):

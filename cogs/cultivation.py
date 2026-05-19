@@ -4,7 +4,7 @@ import random
 import asyncio
 import datetime
 from utils.helpers import get_max_stats, format_embed_color, get_breakthrough_ki_required, get_next_rank
-from utils.db import get_bot_setting, is_user_banned, get_user_stat, update_user_stat
+from utils.db import get_bot_setting, is_user_banned, get_user_stat, update_user_stat, update_item_name, add_item
 from utils.constants import RANKS, ITEM_MUTATIONS
 import config
 
@@ -87,6 +87,15 @@ class BreakthroughView(discord.ui.View):
 
             # Item mutation
             new_item = ITEM_MUTATIONS.get(current_item, current_item)
+            print(f"[DEBUG] cultivation.finish_breakthrough: Item mutation {current_item} -> {new_item}")
+
+            # Update the inventory table (rename the item)
+            try:
+                await update_item_name(db, self.user_id, current_item, new_item)
+            except Exception as e:
+                print(f"[DEBUG] cultivation.finish_breakthrough: Failed to update inventory item: {e}")
+                # If inventory update fails, try to add the new item as a bound item
+                await add_item(db, self.user_id, new_item, 1, bound=True)
 
             # Get rank_id (index in RANKS list)
             new_rank_id = RANKS.index(new_rank) if new_rank in RANKS else 0

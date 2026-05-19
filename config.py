@@ -39,6 +39,8 @@ DB_PATH = "murim.db"
 WEB_DASHBOARD_ENABLED = True
 WEB_DASHBOARD_PORT = 8080
 STARTUP_ANNOUNCE_CHANNEL_ID = 0   # Put your channel ID here, 0 = disabled
+ERROR_LOG_CHANNEL_ID = 1506225893075320882         # Channel ID for error logs (Issue #21)
+ADMIN_LOG_CHANNEL_ID = 1506225842521378897  # Channel ID for admin command logs (0 = disabled)
 
 # ==========================================
 # IDEA 3: FEATURE TOGGLES (Default values)
@@ -84,26 +86,47 @@ EMOJI_COOLDOWN = "⏳"
 # ==========================================
 # IDEA 6: MESSAGE TEMPLATES
 # ==========================================
+# Registration & User Status
 MSG_NOT_REGISTERED = "❌ Use `!start` first."
+MSG_ALREADY_REGISTERED = "❌ Your path is already set. Check your `!stats`."
+MSG_BANNED = "❌ You are banned from using this bot."
+MSG_FEATURE_DISABLED = "❌ The **{feature}** feature is currently disabled."
+
+# Health & Meridians
 MSG_MERIDIAN_DAMAGE = "❌ Your meridians are damaged. Wait **{minutes}m**."
-MSG_COOLDOWN = "⏳ Wait **{seconds}s** before using this again."
-MSG_NO_KI = "❌ Not enough Ki. You need **{required}** Ki."
-MSG_NO_VITALITY = "❌ Not enough Vitality. You need **{required}** Vitality."
-MSG_ALREADY_MEDITATING = "🧘 You are already in deep meditation. Use `!cancel` to stop."
+MSG_MEDITATING = "🧘 You are already in deep meditation. Use `!cancel` to stop."
 MSG_NOT_MEDITATING = "❌ You are not meditating."
 MSG_CANCELLED = "🧘 Meditation cancelled."
+
+# Combat
+MSG_IN_COMBAT = "❌ You are already in combat! Finish your current fight first."
+
+# Resources & Requirements
+MSG_NO_KI = "❌ Not enough Ki. You need **{required}** Ki."
+MSG_NO_VITALITY = "❌ Not enough Vitality. You need **{required}** Vitality."
+MSG_RANK_REQUIREMENT = "❌ You must be at least **{rank}** to use this command."
+
+# Cooldowns
+MSG_COOLDOWN = "⏳ Wait **{seconds}s** before using this again."
+MSG_GIVE_COOLDOWN = "⏳ Please wait **{seconds}s** before using `!give` again."
+
+# Recovery & Actions
 MSG_RECOVER_COMPLETE = "✨ Meditation complete! You regained **+{vit} Vitality** and **+{ki} Ki**."
 MSG_FOCUS_COMPLETE = "🌀 Focused! Converted **10 Vitality** → **5 Ki**."
 MSG_REST_COMPLETE = "🛌 Rest taken! Restored **10 HP** and **10 Vitality**."
-MSG_FEATURE_DISABLED = "❌ The **{feature}** feature is currently disabled."
-MSG_BANNED = "❌ You are banned from using this bot."
-MSG_ALREADY_REGISTERED = "❌ Your path is already set. Check your `!stats`."
-MSG_FEATURE_DISABLED = "❌ The **{feature}** feature is currently disabled."
-MSG_BANNED = "❌ You are banned from using this bot."
-MSG_NOT_REGISTERED = "❌ Use `!start` first."
-MSG_NO_KI = "❌ Not enough Ki. You need **{required}** Ki."
-MSG_MISSING_ARGUMENT = "❌ Missing required argument: `{param}`. Check `!help` for usage."
+
+# Shop & Items
+MSG_ITEM_NOT_FOUND = "❌ Item `{item}` not found. Use `!search` to find items."
+MSG_CANNOT_AFFORD = "❌ You need **{cost}** Taels (you have {taels})."
+MSG_BOUND_ITEM = "📜 Bound Item – This item cannot be traded or sold."
+MSG_CANNOT_GIVE_TO_SELF = "❌ You cannot give items to yourself."
+MSG_CANNOT_GIVE_BOUND = "❌ Bound items cannot be given away."
+MSG_GIVE_LIMIT_REACHED = "❌ You have reached your daily give limit (3). Try again tomorrow."
+
+# Help & Errors
 MSG_HELP_ALREADY_VIEWING = "❌ This manual is being studied by another. Open your own with `!help`."
+MSG_MISSING_ARGUMENT = "❌ Missing required argument: `{param}`. Check `!help` for usage."
+MSG_GENERIC_ERROR = "⚠️ An unexpected error occurred. Please try again."
 
 # ==========================================
 # IDEA 7: DEBUG MODE (default value)

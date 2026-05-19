@@ -57,27 +57,58 @@ async def update_user_stat(db: aiosqlite.Connection, user_id: int, stat_name: st
 # ==========================================
 
 async def get_inventory(db: aiosqlite.Connection, user_id: int) -> list[dict]:
-    """Returns list of {name, quantity} dicts."""
+    """Returns list of {name, quantity, bound} dicts."""
     print(f"[DEBUG] db.get_inventory: user_id={user_id}")
     async with db.execute(
-        "SELECT item_name, quantity FROM inventory WHERE user_id = ? ORDER BY item_name",
+        "SELECT item_name, quantity, bound FROM inventory WHERE user_id = ? ORDER BY item_name",
         (user_id,)
     ) as cursor:
         rows = await cursor.fetchall()
-        result = [{"name": r[0], "quantity": r[1]} for r in rows]
+        result = [{"name": r[0], "quantity": r[1], "bound": r[2]} for r in rows]
         print(f"[DEBUG] db.get_inventory: Found {len(result)} items")
         return result
 
-async def add_item(db: aiosqlite.Connection, user_id: int, item_name: str, qty: int = 1):
-    print(f"[DEBUG] db.add_item: user_id={user_id}, item={item_name}, qty={qty}")
+async def add_item(db: aiosqlite.Connection, user_id: int, item_name: str, qty: int = 1, bound: bool = False):
+    """Add an item to inventory. bound=True makes it non-tradeable/non-sellable."""
+    print(f"[DEBUG] db.add_item: user_id={user_id}, item={item_name}, qty={qty}, bound={bound}")
+    bound_int = 1 if bound else 0
     await db.execute(
-        """INSERT INTO inventory (user_id, item_name, quantity)
-           VALUES (?, ?, ?)
+        """INSERT INTO inventory (user_id, item_name, quantity, bound)
+           VALUES (?, ?, ?, ?)
            ON CONFLICT(user_id, item_name) DO UPDATE SET quantity = quantity + ?""",
-        (user_id, item_name, qty, qty)
+        (user_id, item_name, qty, bound_int, qty)
     )
     await db.commit()
     print(f"[DEBUG] db.add_item: Added/updated")
+
+async def update_item_name(db: aiosqlite.Connection, user_id: int, old_name: str, new_name: str):
+    """Update an item's name (used for item mutation on breakthrough)."""
+    print(f"[DEBUG] db.update_item_name: user_id={user_id}, {old_name} -> {new_name}")
+    async with db.execute(
+        "SELECT quantity, bound FROM inventory WHERE user_id = ? AND item_name = ?",
+        (user_id, old_name)
+    ) as cursor:
+        row = await cursor.fetchone()
+    
+    if not row:
+        print(f"[DEBUG] db.update_item_name: Item not found in inventory")
+        return False
+    
+    quantity, bound = row
+    
+    # Delete old item
+    await db.execute(
+        "DELETE FROM inventory WHERE user_id = ? AND item_name = ?",
+        (user_id, old_name)
+    )
+    # Add new item with same quantity and bound status
+    await db.execute(
+        "INSERT INTO inventory (user_id, item_name, quantity, bound) VALUES (?, ?, ?, ?)",
+        (user_id, new_name, quantity, bound)
+    )
+    await db.commit()
+    print(f"[DEBUG] db.update_item_name: Successfully updated")
+    return True
 
 async def remove_item(db: aiosqlite.Connection, user_id: int, item_name: str, qty: int = 1) -> bool:
     """Returns False if player doesn't have enough."""
@@ -147,10 +178,9 @@ async def remove_admin(db: aiosqlite.Connection, user_id: int):
     print(f"[DEBUG] db.remove_admin: Removed")
 
 # ==========================================
-# NEW HELPER FUNCTIONS (for settings, bans, permissions, cooldowns)
+# BOT SETTINGS
 # ==========================================
 
-# --- Bot Settings (from bot_settings table) ---
 async def get_bot_setting(db: aiosqlite.Connection, key: str, default: Any = None) -> Any:
     """Get a setting from bot_settings table."""
     print(f"[DEBUG] db.get_bot_setting: key={key}")
@@ -160,7 +190,6 @@ async def get_bot_setting(db: aiosqlite.Connection, key: str, default: Any = Non
             print(f"[DEBUG] db.get_bot_setting: Not found, using default {default}")
             return default
         val = row[0]
-        # Try to parse as number or boolean
         if isinstance(val, str):
             if val.isdigit():
                 return int(val)
@@ -179,7 +208,10 @@ async def set_bot_setting(db: aiosqlite.Connection, key: str, value: Any):
     await db.commit()
     print(f"[DEBUG] db.set_bot_setting: Saved")
 
-# --- Banned Users ---
+# ==========================================
+# BANNED USERS
+# ==========================================
+
 async def is_user_banned(db: aiosqlite.Connection, user_id: int) -> bool:
     """Check if a user is banned."""
     print(f"[DEBUG] db.is_user_banned: user_id={user_id}")
@@ -206,7 +238,10 @@ async def unban_user(db: aiosqlite.Connection, user_id: int):
     await db.commit()
     print(f"[DEBUG] db.unban_user: Unbanned")
 
-# --- Permissions (from admin_permissions table) ---
+# ==========================================
+# PERMISSIONS
+# ==========================================
+
 async def get_user_permissions(db: aiosqlite.Connection, user_id: int) -> list[str]:
     """Get all permission strings for a user."""
     print(f"[DEBUG] db.get_user_permissions: user_id={user_id}")
@@ -236,7 +271,10 @@ async def remove_user_permission(db: aiosqlite.Connection, user_id: int, permiss
     await db.commit()
     print(f"[DEBUG] db.remove_user_permission: Removed")
 
-# --- User Cooldowns (survive bot restart) ---
+# ==========================================
+# USER COOLDOWNS
+# ==========================================
+
 async def get_user_cooldown(db: aiosqlite.Connection, cooldown_key: str) -> Optional[datetime.datetime]:
     """Get last used timestamp for a cooldown key."""
     print(f"[DEBUG] db.get_user_cooldown: key={cooldown_key}")
