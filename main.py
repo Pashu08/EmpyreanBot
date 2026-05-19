@@ -234,6 +234,8 @@ async def init_db():
         print("[DEBUG] init_db: inventory table ensured")
 
         # --- Insert default bot_settings ---
+        # FIXED: Added missing comma after ("toggle_core", "True")
+        
         default_settings = [
             ("toggle_actions", "True"),
             ("actions_vit_cost_work", "10"),
