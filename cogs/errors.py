@@ -15,14 +15,14 @@ class ErrorHandler(commands.Cog):
 
     async def _send_to_log_channel(self, error_message, ctx, error):
         """Send error details to the configured log channel."""
-        if not config.ERROR_LOG_CHANNEL_ID:1506225893075320882
+        if not config.ERROR_LOG_CHANNEL_ID:
             return
-        
+
         channel = self.bot.get_channel(config.ERROR_LOG_CHANNEL_ID)
         if not channel:
             print(f"[DEBUG] errors: Could not find channel {config.ERROR_LOG_CHANNEL_ID}")
             return
-        
+
         embed = discord.Embed(
             title="❌ Error Occurred",
             description=f"```py\n{error_message[:1900]}\n```",
@@ -32,7 +32,7 @@ class ErrorHandler(commands.Cog):
         embed.add_field(name="Command", value=f"`{ctx.command}`" if ctx.command else "Unknown", inline=True)
         embed.add_field(name="User", value=f"{ctx.author} ({ctx.author.id})", inline=True)
         embed.add_field(name="Channel", value=f"{ctx.channel.mention}", inline=True)
-        
+
         try:
             await channel.send(embed=embed)
         except Exception as e:
@@ -74,7 +74,7 @@ class ErrorHandler(commands.Cog):
         error_details = f"{type(error).__name__}: {error}\n{traceback.format_exc()}"
         await self._send_to_log_channel(error_details[:2000], ctx, error)
 
-        # Send generic error message to user (Issue #10 fixed - using config template)
+        # Send generic error message to user
         await ctx.send(config.MSG_GENERIC_ERROR, ephemeral=True)
 
 async def setup(bot):
