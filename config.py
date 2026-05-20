@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 # Load the secrets from .env
 load_dotenv()
 
+
 # ==========================================
 # BOT CORE
 # ==========================================

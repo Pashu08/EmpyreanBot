@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 import asyncio
 import datetime
+import config
 
 PERMANENT_GOD = 756012403291848804 
 temporary_gods = set() 
