@@ -8,6 +8,61 @@ import config
 
 print("[DEBUG] shop.py: Loading Shop cog...")
 
+# ==========================================
+# SHOP BUTTONS VIEW
+# ==========================================
+class ShopView(discord.ui.View):
+    def __init__(self, ctx, user_bg):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+        self.user_bg = user_bg
+
+        # Add buttons for each shop
+        self.add_item(ShopButton("Apothecary", "💊", discord.ButtonStyle.primary))
+        self.add_item(ShopButton("Provisioner", "🍱", discord.ButtonStyle.primary))
+
+        # Only show Shady Dealer to Outcasts
+        if user_bg == "Outcast":
+            self.add_item(ShopButton("Shady Dealer", "👺", discord.ButtonStyle.danger))
+
+class ShopButton(discord.ui.Button):
+    def __init__(self, shop_name, emoji, style):
+        super().__init__(label=shop_name, emoji=emoji, style=style, custom_id=shop_name)
+        self.shop_name = shop_name
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.view.ctx.author.id:
+            return await interaction.response.send_message("❌ This menu is not for you.", ephemeral=True)
+
+        # Get items for this shop
+        items = []
+        for item_name, data in SHOP_ITEMS.items():
+            if data.get("shop") == self.shop_name:
+                items.append((item_name, data["price"], data["desc"]))
+
+        if not items:
+            return await interaction.response.send_message(f"❌ {self.shop_name} has no items available.", ephemeral=True)
+
+        # Get player's Taels
+        taels = await get_user_stat(interaction.client.db, interaction.user.id, "taels") or 0
+
+        # Build embed
+        embed = discord.Embed(
+            title=f"🏪 {self.shop_name}",
+            description=f"💰 Your Taels: **{taels}**\n\nUse `!buy <item> [quantity]` to purchase.\nExample: `!buy Spirit Gathering Dan 2`",
+            color=format_embed_color("main")
+        )
+
+        for item_name, price, desc in items[:10]:  # Max 10 items per shop
+            embed.add_field(name=f"{item_name} — {price} Taels", value=desc, inline=False)
+
+        embed.set_footer(text="Click another button to browse different shops.")
+
+        await interaction.response.edit_message(embed=embed, view=self.view)
+
+# ==========================================
+# MAIN COG
+# ==========================================
 class Shop(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -43,7 +98,7 @@ class Shop(commands.Cog):
         await ctx.send(embed=embed, ephemeral=True)
 
     # ==========================================
-    # BROWSING: !bazaar (read‑only shop menu)
+    # BAZAAR: Interactive shop menu (buttons)
     # ==========================================
     @commands.hybrid_command(name="bazaar", aliases=["bz"], description="Browse the market stalls.")
     async def bazaar(self, ctx):
@@ -54,41 +109,48 @@ class Shop(commands.Cog):
         if await is_user_banned(self.bot.db, ctx.author.id):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
 
+        # Get user's background to check for Shady Dealer access
+        user_bg = await get_user_stat(self.bot.db, ctx.author.id, "background") or "None"
+        taels = await get_user_stat(self.bot.db, ctx.author.id, "taels") or 0
+
         embed = discord.Embed(
             title="🏮 The Great Bazaar",
-            description="Use `!buy <item> [quantity]` to purchase.\n"
-                        "Example: `!buy \"Spirit Gathering Dan\" 2`\n\n"
-                        "**Apothecary** (💊)\n"
-                        "• Spirit Gathering Dan – 100 Taels (restores 20 Ki)\n"
-                        "• Jade Marrow Dew – 150 Taels (restores 50% Max Vitality)\n"
-                        "• Qi Pill (small) – 50 Taels (restores 10 Ki)\n"
-                        "• Muscle Recovery Elixir – 80 Taels (restores 20 Vitality)\n\n"
-                        "**Provisioner** (🍱)\n"
-                        "• Nine-Sun Restoration Soup – 30 Taels (restores 15 Vitality)\n"
-                        "• Dried Rations – 10 Taels (restores 5 Vitality)\n"
-                        "• Iron Bandage – 25 Taels (restores 10 HP)\n"
-                        "• Herbal Tea – 20 Taels (restores 10 Vitality)\n\n"
-                        "**Shady Dealer** (👺) – for Outcasts only\n"
-                        "• Blood-Burning Catalyst – 1000 Taels (+100 Ki, -50 HP) – Bound item\n"
-                        "• Broken Technique Scroll – 500 Taels (+5% Mastery, one‑time use)",
+            description=f"💰 Your Taels: **{taels}**\n\nClick a button below to browse a shop.",
             color=format_embed_color("main")
         )
-        embed.set_footer(text="Use `!search <item>` to find where an item is sold.")
-        await ctx.send(embed=embed)
+        embed.set_footer(text="Use `!buy <item> [quantity]` to purchase items.")
+
+        view = ShopView(ctx, user_bg)
+        await ctx.send(embed=embed, view=view)
 
     # ==========================================
-    # BUY: !buy <item> [quantity]
+    # BUY: !buy <item> [quantity] (no quotes needed)
     # ==========================================
-    @commands.hybrid_command(name="buy", description="Purchase an item.")
-    async def buy(self, ctx, item_name: str, quantity: int = 1):
-        print(f"[DEBUG] shop.buy: {ctx.author.id} wants {quantity} of {item_name}")
+    @commands.hybrid_command(name="buy", description="Purchase an item. Usage: !buy <item name> [quantity]")
+    async def buy(self, ctx, *, args: str):
+        print(f"[DEBUG] shop.buy: {ctx.author.id} wants to buy {args}")
 
         if not await self._is_feature_enabled(ctx):
             return
         if await is_user_banned(self.bot.db, ctx.author.id):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
 
-        # Find item in SHOP_ITEMS (case‑insensitive)
+        # Parse arguments: quantity is last word if it's a number
+        parts = args.strip().split()
+        if not parts:
+            return await ctx.send("❌ Please specify an item to buy. Example: `!buy Spirit Gathering Dan 2`", ephemeral=True)
+
+        quantity = 1
+        if parts[-1].isdigit():
+            quantity = int(parts[-1])
+            item_name = " ".join(parts[:-1])
+        else:
+            item_name = " ".join(parts)
+
+        if not item_name:
+            return await ctx.send("❌ Please specify an item to buy. Example: `!buy Spirit Gathering Dan 2`", ephemeral=True)
+
+        # Find item in SHOP_ITEMS (case-insensitive)
         item_key = None
         item_data = None
         for key, data in SHOP_ITEMS.items():
@@ -96,6 +158,7 @@ class Shop(commands.Cog):
                 item_key = key
                 item_data = data
                 break
+
         if not item_data:
             return await ctx.send(f"❌ Item `{item_name}` not found. Use `!search` to find items.", ephemeral=True)
 

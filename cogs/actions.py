@@ -284,7 +284,7 @@ class Actions(commands.Cog):
         hp_before = await get_user_stat(self.bot.db, user_id, "hp") or 0
         vit_before = new_vit
 
-        # Random choice event
+        # Random choice event (5% chance)
         choice_event = await self._maybe_choice_event(ctx)
         if choice_event:
             embed = discord.Embed(title=choice_event["title"], description=choice_event["description"], color=format_embed_color("gold"))
@@ -292,30 +292,33 @@ class Actions(commands.Cog):
             await ctx.send(embed=embed, view=view)
             return
 
-        # Random normal event
-        event_text, event_effects = roll_random_event()
+        # Random normal event (20% chance)
+        event_text = None
+        event_effects = {}
         event_changes = []
-        if "ki" in event_effects:
-            new_ki = min(max_stats["ki_cap"], ki_before + event_effects["ki"])
-            await update_user_stat(self.bot.db, user_id, "ki", new_ki)
-            event_changes.append(f"✨ {event_effects['ki']:+} Ki")
-        if "taels" in event_effects:
-            new_taels += event_effects["taels"]
-            event_changes.append(f"💰 {event_effects['taels']:+} Taels")
-        if "vit" in event_effects:
-            new_vit = max(0, new_vit + event_effects["vit"])
-            event_changes.append(f"❤️ {event_effects['vit']:+} Vitality")
-        if "hp" in event_effects:
-            new_hp = min(max_stats["max_hp"], hp_before + event_effects["hp"])
-            await update_user_stat(self.bot.db, user_id, "hp", new_hp)
-            event_changes.append(f"🩸 {event_effects['hp']:+} HP")
-        if "mastery" in event_effects:
-            new_mastery = min(100.0, new_mastery + event_effects["mastery"])
-            event_changes.append(f"📖 {event_effects['mastery']:+}% Mastery")
-        if "combat_mastery" in event_effects:
-            new_cm = (await get_user_stat(self.bot.db, user_id, "combat_mastery") or 0) + event_effects["combat_mastery"]
-            await update_user_stat(self.bot.db, user_id, "combat_mastery", new_cm)
-            event_changes.append(f"⚔️ {event_effects['combat_mastery']:+} Combat Mastery")
+        if random.random() <= 0.2:  # 20% chance for normal event
+            event_text, event_effects = roll_random_event()
+            if "ki" in event_effects:
+                new_ki = min(max_stats["ki_cap"], ki_before + event_effects["ki"])
+                await update_user_stat(self.bot.db, user_id, "ki", new_ki)
+                event_changes.append(f"✨ {event_effects['ki']:+} Ki")
+            if "taels" in event_effects:
+                new_taels += event_effects["taels"]
+                event_changes.append(f"💰 {event_effects['taels']:+} Taels")
+            if "vit" in event_effects:
+                new_vit = max(0, new_vit + event_effects["vit"])
+                event_changes.append(f"❤️ {event_effects['vit']:+} Vitality")
+            if "hp" in event_effects:
+                new_hp = min(max_stats["max_hp"], hp_before + event_effects["hp"])
+                await update_user_stat(self.bot.db, user_id, "hp", new_hp)
+                event_changes.append(f"🩸 {event_effects['hp']:+} HP")
+            if "mastery" in event_effects:
+                new_mastery = min(100.0, new_mastery + event_effects["mastery"])
+                event_changes.append(f"📖 {event_effects['mastery']:+}% Mastery")
+            if "combat_mastery" in event_effects:
+                new_cm = (await get_user_stat(self.bot.db, user_id, "combat_mastery") or 0) + event_effects["combat_mastery"]
+                await update_user_stat(self.bot.db, user_id, "combat_mastery", new_cm)
+                event_changes.append(f"⚔️ {event_effects['combat_mastery']:+} Combat Mastery")
 
         await self.bot.db.execute(
             "UPDATE users SET vitality=?, taels=?, mastery=? WHERE user_id=?",
@@ -412,6 +415,7 @@ class Actions(commands.Cog):
         hp_before = await get_user_stat(self.bot.db, user_id, "hp") or 0
         vit_before = new_vit
 
+        # Random choice event (5% chance)
         choice_event = await self._maybe_choice_event(ctx)
         if choice_event:
             embed = discord.Embed(title=choice_event["title"], description=choice_event["description"], color=format_embed_color("gold"))
@@ -419,21 +423,25 @@ class Actions(commands.Cog):
             await ctx.send(embed=embed, view=view)
             return
 
-        event_text, event_effects = roll_random_event()
+        # Random normal event (20% chance)
+        event_text = None
+        event_effects = {}
         event_changes = []
-        if "ki" in event_effects:
-            new_ki = min(ki_cap, new_ki + event_effects["ki"])
-            event_changes.append(f"✨ {event_effects['ki']:+} Ki")
-        if "vit" in event_effects:
-            new_vit = max(0, new_vit + event_effects["vit"])
-            event_changes.append(f"❤️ {event_effects['vit']:+} Vitality")
-        if "hp" in event_effects:
-            new_hp = min(max_stats["max_hp"], hp_before + event_effects["hp"])
-            await update_user_stat(self.bot.db, user_id, "hp", new_hp)
-            event_changes.append(f"🩸 {event_effects['hp']:+} HP")
-        if "mastery" in event_effects:
-            new_mastery = min(100.0, new_mastery + event_effects["mastery"])
-            event_changes.append(f"📖 {event_effects['mastery']:+}% Mastery")
+        if random.random() <= 0.2:  # 20% chance for normal event
+            event_text, event_effects = roll_random_event()
+            if "ki" in event_effects:
+                new_ki = min(ki_cap, new_ki + event_effects["ki"])
+                event_changes.append(f"✨ {event_effects['ki']:+} Ki")
+            if "vit" in event_effects:
+                new_vit = max(0, new_vit + event_effects["vit"])
+                event_changes.append(f"❤️ {event_effects['vit']:+} Vitality")
+            if "hp" in event_effects:
+                new_hp = min(max_stats["max_hp"], hp_before + event_effects["hp"])
+                await update_user_stat(self.bot.db, user_id, "hp", new_hp)
+                event_changes.append(f"🩸 {event_effects['hp']:+} HP")
+            if "mastery" in event_effects:
+                new_mastery = min(100.0, new_mastery + event_effects["mastery"])
+                event_changes.append(f"📖 {event_effects['mastery']:+}% Mastery")
 
         await self.bot.db.execute(
             "UPDATE users SET vitality=?, ki=?, mastery=? WHERE user_id=?",
@@ -531,6 +539,7 @@ class Actions(commands.Cog):
         # Store cooldown
         self.bot.command_cooldowns[cooldown_key] = datetime.datetime.now()
 
+        # Random choice event (5% chance)
         choice_event = await self._maybe_choice_event(ctx)
         if choice_event:
             embed = discord.Embed(title=choice_event["title"], description=choice_event["description"], color=format_embed_color("gold"))
@@ -538,11 +547,15 @@ class Actions(commands.Cog):
             await ctx.send(embed=embed, view=view)
             return
 
-        event_text, event_effects = roll_random_event()
+        # Random normal event (20% chance)
+        event_text = None
+        event_effects = {}
         event_changes = []
-        if "vit" in event_effects:
-            new_vit = max(0, new_vit + event_effects["vit"])
-            event_changes.append(f"❤️ {event_effects['vit']:+} Vitality")
+        if random.random() <= 0.2:  # 20% chance for normal event
+            event_text, event_effects = roll_random_event()
+            if "vit" in event_effects:
+                new_vit = max(0, new_vit + event_effects["vit"])
+                event_changes.append(f"❤️ {event_effects['vit']:+} Vitality")
 
         await self.bot.db.execute(
             "UPDATE users SET vitality=?, mastery=? WHERE user_id=?",

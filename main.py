@@ -163,6 +163,10 @@ async def init_db():
             "hidden_techs_unlocked": "TEXT",
             # ADDED: heartbeat_dm column directly in schema
             "heartbeat_dm": "INTEGER DEFAULT 1",
+            "minor_realm": "TEXT DEFAULT 'Initial'",
+            "minor_breakthrough_bonus_ki": "INTEGER DEFAULT 0",
+            "minor_breakthrough_bonus_damage": "INTEGER DEFAULT 0",
+            "minor_breakthrough_bonus_bt": "INTEGER DEFAULT 0",
         }
 
         await c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")

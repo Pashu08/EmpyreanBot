@@ -74,8 +74,13 @@ class ErrorHandler(commands.Cog):
         error_details = f"{type(error).__name__}: {error}\n{traceback.format_exc()}"
         await self._send_to_log_channel(error_details[:2000], ctx, error)
 
-        # Send generic error message to user
-        await ctx.send(config.MSG_GENERIC_ERROR, ephemeral=True)
+        # Send generic error message to user as embed
+        embed = discord.Embed(
+            title="⚠️ Unexpected Error",
+            description=config.MSG_GENERIC_ERROR,
+            color=discord.Color.orange()
+        )
+        await ctx.send(embed=embed, ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(ErrorHandler(bot))
