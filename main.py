@@ -419,7 +419,7 @@ class MurimBot(commands.Bot):
                 log_error_to_file(f"Startup announcement failed: {e}")
 
 # ==========================================
-# GRACEFUL SHUTDOWN HANDLER
+# GRACEFL SHUTDOWN HANDLER
 # ==========================================
 bot_instance = None
 

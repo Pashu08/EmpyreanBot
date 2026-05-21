@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ==========================================
-# BOT CORE
+# BOT  CORE
 # ==========================================
 TOKEN = os.getenv('DISCORD_TOKEN')
 PREFIX = "!"
