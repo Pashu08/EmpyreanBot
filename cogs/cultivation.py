@@ -4,15 +4,11 @@ import random
 import asyncio
 import datetime
 from utils.helpers import get_max_stats, format_embed_color, get_next_rank
-from utils.db import get_bot_setting, is_user_banned, get_user_stat, update_user_stat, update_item_name, add_item, has_item, remove_item, get_user_cooldown, set_user_cooldown
+from utils.db import get_bot_setting, is_user_banned, get_user_stat, update_user_stat, update_item_name, add_item, has_item, remove_item, get_user_cooldown
 from utils.constants import RANKS, ITEM_MUTATIONS
 import config
 
 print("[DEBUG] cultivation.py: Loading Cultivation cog...")
-
-# ==========================================
-# BREAKTHROUGH DATA (Decreasing chances per realm)
-# ==========================================
 
 MINOR_BREAKTHROUGH_CHANCES = {
     "The Bound (Mortal)": {"Early": 90, "Middle": 75, "Late": 60, "Peak": 45},
@@ -50,9 +46,7 @@ MAJOR_FAILURE_PENALTY = {"ki_percent": 30, "taels": 100, "meridian_minutes": 15}
 MINOR_COOLDOWN_MINUTES = 10
 MAJOR_COOLDOWN_MINUTES = 30
 
-# ==========================================
-# BREAKTHROUGH UI (Major breakthroughs only)
-# ==========================================
+
 class BreakthroughView(discord.ui.View):
     def __init__(self, bot, user_id, user_rank, user_bg):
         super().__init__(timeout=60)
@@ -65,15 +59,15 @@ class BreakthroughView(discord.ui.View):
 
         self.prompts = [
             {
-                "text": "🌀 **Stage 1: The Gathering**\nYour Ki is swirling violently within your dantian. It feels like molten lead. How do you stabilize the flow?",
+                "text": "🌀 Stage 1: The Gathering\nYour Ki is swirling violently within your dantian. It feels like molten lead. How do you stabilize the flow?",
                 "choices": ["Force it down", "Circulate slowly", "Let it overflow"]
             },
             {
-                "text": "🔥 **Stage 2: The Core Heat**\nYour veins begin to glow. The heat is becoming unbearable. Your vision blurs. What is your next move?",
+                "text": "🔥 Stage 2: The Core Heat\nYour veins begin to glow. The heat is becoming unbearable. Your vision blurs. What is your next move?",
                 "choices": ["Focus on breathing", "Ice the spirit", "Endure the pain"]
             },
             {
-                "text": "⚡ **Stage 3: The Final Wall**\nYou see the bottleneck. A massive wall of shadow blocking your path to the next rank. Smash it!",
+                "text": "⚡ Stage 3: The Final Wall\nYou see the bottleneck. A massive wall of shadow blocking your path to the next rank. Smash it!",
                 "choices": ["All-out strike", "Look for a crack", "Pray for luck"]
             }
         ]
@@ -144,14 +138,12 @@ class BreakthroughView(discord.ui.View):
         """, (new_rank, new_rank_id, new_item, new_hp_cap, new_vit_cap, self.user_id))
         await db.commit()
 
-        print(f"[DEBUG] cultivation: {self.user_id} advanced to {new_rank}")
-
         result_embed = discord.Embed(
             title="🎊 REALM ASCENSION SUCCESS",
             description=(
                 f"You have reached the **{new_rank}**!\n"
                 f"Your item has evolved into: **{new_item}**.\n\n"
-                f"📈 **Stat Growth:**\n"
+                f"📈 Stat Growth:\n"
                 f"Max HP: **{new_hp_cap}**\n"
                 f"Max Vitality: **{new_vit_cap}**\n"
                 f"Ki Cap: **{new_ki_cap}**"
@@ -175,9 +167,13 @@ class BreakthroughView(discord.ui.View):
         debuff_time = (datetime.datetime.now() + datetime.timedelta(minutes=penalty["meridian_minutes"])).isoformat()
         await update_user_stat(db, self.user_id, "meridian_damage", debuff_time)
 
-        await self._set_cooldown(db, self.user_id, "major")
-
-        print(f"[DEBUG] cultivation: {self.user_id} failed major breakthrough")
+        cooldown_key = f"breakthrough_major_{self.user_id}"
+        now = datetime.datetime.now().isoformat()
+        await db.execute(
+            "INSERT OR REPLACE INTO user_cooldowns (cooldown_key, last_used) VALUES (?, ?)",
+            (cooldown_key, now)
+        )
+        await db.commit()
 
         result_embed = discord.Embed(
             title="💀 BREAKTHROUGH FAILED",
@@ -193,18 +189,7 @@ class BreakthroughView(discord.ui.View):
         await interaction.response.edit_message(embed=result_embed, view=None)
         self.stop()
 
-    async def _set_cooldown(self, db, user_id, bt_type):
-        cooldown_key = f"breakthrough_{bt_type}_{user_id}"
-        now = datetime.datetime.now().isoformat()
-        await db.execute(
-            "INSERT OR REPLACE INTO user_cooldowns (cooldown_key, last_used) VALUES (?, ?)",
-            (cooldown_key, now)
-        )
-        await db.commit()
 
-# ==========================================
-# MAIN COG
-# ==========================================
 class Cultivation(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -263,8 +248,6 @@ class Cultivation(commands.Cog):
             await update_user_stat(db, user_id, "minor_breakthrough_bonus_damage", current_damage_bonus + bonus.get("tech_damage", 0))
             await update_user_stat(db, user_id, "minor_breakthrough_bonus_bt", current_bt_bonus + bonus.get("major_bt_chance", 0))
 
-        print(f"[DEBUG] cultivation: {user_id} advanced to {target_minor} minor realm")
-
     async def _apply_minor_failure(self, user_id, target_minor):
         db = self.bot.db
         penalty = FAILURE_PENALTIES.get(target_minor, {"ki_percent": 15, "taels": 20})
@@ -278,9 +261,7 @@ class Cultivation(commands.Cog):
             new_taels = max(0, current_taels - penalty["taels"])
             await update_user_stat(db, user_id, "taels", new_taels)
 
-        print(f"[DEBUG] cultivation: {user_id} failed minor breakthrough to {target_minor}")
-
-    @commands.hybrid_command(name="breakthrough", aliases=["bt"], description="Attempt a breakthrough (minor or major).")
+    @commands.hybrid_command(name="breakthrough", aliases=["bt"])
     async def breakthrough(self, ctx):
         print(f"[DEBUG] cultivation.breakthrough: Called by {ctx.author.id}")
 
@@ -307,10 +288,7 @@ class Cultivation(commands.Cog):
             minor_realm = "Initial"
             await update_user_stat(db, user_id, "minor_realm", "Initial")
 
-        current_index = MINOR_REALM_INDEX.get(minor_realm, 0)
         max_ki_cap = get_max_stats(rank)["ki_cap"]
-
-        print(f"[DEBUG] cultivation.breakthrough: User {user_id} - Rank={rank}, Minor={minor_realm}, Ki={ki}/{max_ki_cap}")
 
         if minor_realm == "Peak":
             await self._attempt_major_breakthrough(ctx, user_id, rank, bg, ki, max_ki_cap, mastery, taels)
@@ -329,11 +307,11 @@ class Cultivation(commands.Cog):
         required_ki = int(max_ki_cap * required_percent / 100)
 
         if ki < required_ki:
-            return await ctx.send(f"❌ You need **{required_ki} Ki** to attempt {target_minor} minor realm. (You have {ki})", ephemeral=True)
+            return await ctx.send(f"❌ You need {required_ki} Ki to attempt {target_minor} minor realm. (You have {ki})", ephemeral=True)
 
         on_cooldown, remaining = await self._check_cooldown(user_id, "minor")
         if on_cooldown:
-            return await ctx.send(f"⏳ You must wait **{remaining} seconds** before attempting another minor breakthrough.", ephemeral=True)
+            return await ctx.send(f"⏳ You must wait {remaining} seconds before attempting another minor breakthrough.", ephemeral=True)
 
         base_chance = await self._get_breakthrough_chance(user_id, rank, target_minor, is_major=False)
 
@@ -346,13 +324,19 @@ class Cultivation(commands.Cog):
         pill_bonus = 15 if has_pill else 0
         final_chance = min(base_chance + pill_bonus, 95)
 
+        # Calculate pill message BEFORE the embed (fixes syntax highlighting)
+        if has_pill:
+            pill_message = "💊 Breakthrough Pill: +15% (you have one)"
+        else:
+            pill_message = "💊 Breakthrough Pill: +15% (you don't have one)"
+
         embed = discord.Embed(
             title="⚔️ Minor Breakthrough Attempt",
             description=(
                 f"Attempt to reach **{target_minor}** minor realm.\n\n"
-                f"📊 **Success Chance:** {final_chance}%\n"
-                f"💰 **Cost:** None (Ki will be consumed on failure)\n"
-                f"{'💊 **Breakthrough Pill:** +15% (you have one)' if has_pill else '💊 **Breakthrough Pill:** +15% (you don't have one)'}"
+                f"📊 Success Chance: {final_chance}%\n"
+                f"💰 Cost: None (Ki will be consumed on failure)\n"
+                f"{pill_message}"
             ),
             color=format_embed_color("main")
         )
@@ -385,7 +369,7 @@ class Cultivation(commands.Cog):
                 title="✅ MINOR BREAKTHROUGH SUCCESS",
                 description=(
                     f"You have reached the **{target_minor}** minor realm!\n\n"
-                    f"📈 **Permanent Bonuses Gained:**\n"
+                    f"📈 Permanent Bonuses Gained:\n"
                     f"• Ki Gain: +{MINOR_REALM_BONUSES.get(target_minor, {}).get('ki_gain', 0)}%\n"
                     f"• Technique Damage: +{MINOR_REALM_BONUSES.get(target_minor, {}).get('tech_damage', 0)}%\n"
                     f"• Major BT Chance: +{MINOR_REALM_BONUSES.get(target_minor, {}).get('major_bt_chance', 0)}%"
@@ -416,14 +400,14 @@ class Cultivation(commands.Cog):
         required_ki = int(max_ki_cap * 1.5)
 
         if ki < required_ki:
-            return await ctx.send(f"❌ You need **{required_ki} Ki** to attempt a major breakthrough. (You have {ki})", ephemeral=True)
+            return await ctx.send(f"❌ You need {required_ki} Ki to attempt a major breakthrough. (You have {ki})", ephemeral=True)
 
         on_cooldown, remaining = await self._check_cooldown(user_id, "major")
         if on_cooldown:
-            return await ctx.send(f"⏳ You must wait **{remaining} seconds** before attempting another major breakthrough.", ephemeral=True)
+            return await ctx.send(f"⏳ You must wait {remaining} seconds before attempting another major breakthrough.", ephemeral=True)
 
         if "Mortal" in rank and (mastery is None or mastery < 50.0):
-            return await ctx.send("❌ To advance beyond the Mortal realm, you must master at least **50%** of a technique at the **Pavilion of Hidden Scrolls**.", ephemeral=True)
+            return await ctx.send("❌ To advance beyond the Mortal realm, you must master at least 50% of a technique at the Pavilion of Hidden Scrolls.", ephemeral=True)
 
         base_chance = await self._get_breakthrough_chance(user_id, rank, None, is_major=True)
 
@@ -436,13 +420,19 @@ class Cultivation(commands.Cog):
         pill_bonus = 15 if has_pill else 0
         final_chance = min(base_chance + pill_bonus, 95)
 
+        # Calculate pill message BEFORE the embed (fixes syntax highlighting)
+        if has_pill:
+            pill_message = "💊 Breakthrough Pill: +15% (you have one)"
+        else:
+            pill_message = "💊 Breakthrough Pill: +15% (you don't have one)"
+
         embed = discord.Embed(
             title="⚔️ MAJOR BREAKTHROUGH ATTEMPT",
             description=(
                 f"Attempt to ascend from **{rank}** to **{get_next_rank(rank)}**.\n\n"
-                f"📊 **Success Chance:** {final_chance}%\n"
-                f"💰 **Cost:** None (Ki and Taels will be lost on failure)\n"
-                f"{'💊 **Breakthrough Pill:** +15% (you have one)' if has_pill else '💊 **Breakthrough Pill:** +15% (you don't have one)'}"
+                f"📊 Success Chance: {final_chance}%\n"
+                f"💰 Cost: None (Ki and Taels will be lost on failure)\n"
+                f"{pill_message}"
             ),
             color=format_embed_color("main")
         )
@@ -470,7 +460,7 @@ class Cultivation(commands.Cog):
         )
         await ctx.send(embed=embed, view=view)
 
-    @commands.hybrid_command(name="breakthrough_status", aliases=["btst"], description="Check your breakthrough progress and bonuses.")
+    @commands.hybrid_command(name="breakthrough_status", aliases=["btst"])
     async def breakthrough_status(self, ctx):
         print(f"[DEBUG] cultivation.breakthrough_status: Called by {ctx.author.id}")
 
@@ -504,7 +494,7 @@ class Cultivation(commands.Cog):
 
         embed = discord.Embed(
             title="📈 Breakthrough Status",
-            description=f"**Rank:** {rank}\n**Minor Realm:** {minor_realm}",
+            description=f"Rank: {rank}\nMinor Realm: {minor_realm}",
             color=format_embed_color("teal")
         )
 
@@ -514,14 +504,14 @@ class Cultivation(commands.Cog):
             required_ki = int(max_ki * required_percent / 100)
             embed.add_field(
                 name="Next Minor Breakthrough",
-                value=f"Target: **{next_minor}**\nKi Needed: {required_ki}/{max_ki} ({required_percent}%)",
+                value=f"Target: {next_minor}\nKi Needed: {required_ki}/{max_ki} ({required_percent}%)",
                 inline=False
             )
         elif minor_realm == "Peak" and rank != "Peak Master":
             required_ki = int(max_ki * 1.5)
             embed.add_field(
                 name="Next Major Breakthrough",
-                value=f"Target: **{get_next_rank(rank)}**\nKi Needed: {required_ki}/{max_ki} (150%)",
+                value=f"Target: {get_next_rank(rank)}\nKi Needed: {required_ki}/{max_ki} (150%)",
                 inline=False
             )
         elif rank == "Peak Master" and minor_realm == "Peak":
@@ -533,14 +523,15 @@ class Cultivation(commands.Cog):
         embed.add_field(
             name="📊 Permanent Bonuses",
             value=(
-                f"✨ Ki Gain: **+{bonus_ki}%**\n"
-                f"⚔️ Technique Damage: **+{bonus_damage}%**\n"
-                f"🌀 Major BT Chance: **+{bonus_bt}%**"
+                f"✨ Ki Gain: +{bonus_ki}%\n"
+                f"⚔️ Technique Damage: +{bonus_damage}%\n"
+                f"🌀 Major BT Chance: +{bonus_bt}%"
             ),
             inline=False
         )
 
         await ctx.send(embed=embed)
+
 
 async def setup(bot):
     await bot.add_cog(Cultivation(bot))
