@@ -9,6 +9,7 @@ import time
 import datetime
 from aiohttp import web
 import json
+from libsql_experimental import create_client
 
 print("[DEBUG] main.py: Starting imports...")
 
@@ -239,7 +240,7 @@ async def init_db():
 
         # --- Insert default bot_settings ---
         # FIXED: Added missing comma after ("toggle_core", "True")
-        
+
         default_settings = [
             ("toggle_actions", "True"),
             ("actions_vit_cost_work", "10"),
@@ -307,10 +308,13 @@ class MurimBot(commands.Bot):
         print("📦 Initializing Database...")
         await init_db()
 
-        print("🔗 Opening Database Connection...")
-        # ADDED: timeout parameter to prevent database locks
-        self.db = await aiosqlite.connect("murim.db", timeout=30.0)
-        print("[DEBUG] setup_hook: Database connection opened")
+        print("🔗 Opening Database Connection to Turso...")
+        # FIXED: Using Turso instead of local SQLite
+        self.db = create_client(
+            url=config.TURSO_URL,
+            auth_token=config.TURSO_AUTH_TOKEN
+        )
+        print("[DEBUG] setup_hook: Turso connection opened")
 
         if config.WEB_DASHBOARD_ENABLED:
             try:

@@ -4,12 +4,13 @@ from dotenv import load_dotenv
 # Load the secrets from .env
 load_dotenv()
 
-
 # ==========================================
 # BOT CORE
 # ==========================================
 TOKEN = os.getenv('DISCORD_TOKEN')
 PREFIX = "!"
+TURSO_URL = os.getenv('TURSO_URL')
+TURSO_AUTH_TOKEN = os.getenv('TURSO_AUTH_TOKEN')
 
 # ==========================================
 # STARTING STATS
