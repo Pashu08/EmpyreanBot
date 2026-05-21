@@ -9,7 +9,6 @@ import time
 import datetime
 from aiohttp import web
 import json
-from libsql_experimental import create_client
 
 print("[DEBUG] main.py: Starting imports...")
 
@@ -308,13 +307,9 @@ class MurimBot(commands.Bot):
         print("📦 Initializing Database...")
         await init_db()
 
-        print("🔗 Opening Database Connection to Turso...")
-        # FIXED: Using Turso instead of local SQLite
-        self.db = create_client(
-            url=config.TURSO_URL,
-            auth_token=config.TURSO_AUTH_TOKEN
-        )
-        print("[DEBUG] setup_hook: Turso connection opened")
+        print("🔗 Opening Database Connection...")
+        self.db = await aiosqlite.connect("murim.db", timeout=30.0)
+        print("[DEBUG] setup_hook: Database connection opened")
 
         if config.WEB_DASHBOARD_ENABLED:
             try:
@@ -419,7 +414,7 @@ class MurimBot(commands.Bot):
                 log_error_to_file(f"Startup announcement failed: {e}")
 
 # ==========================================
-# GRACEFL SHUTDOWN HANDLER
+# GRACEFUL SHUTDOWN HANDLER
 # ==========================================
 bot_instance = None
 
