@@ -37,7 +37,7 @@ DB_PATH = "murim.db"
 # MONGODB ATLAS
 # ==========================================
 # Replace the placeholders with your actual MongoDB credentials
-MONGODB_URI = os.getenv("MONGODB_URI", "mongodb+srv://USERNAME:PASSWORD@cluster.mongodb.net/")
+MONGODB_URI = os.getenv("MONGODB_URI", NONE)
 MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "empyrean_bot")
 
 # ==========================================

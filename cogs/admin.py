@@ -463,7 +463,7 @@ class Admin(commands.Cog):
         await ctx.send(f"✅ **Unbanned** {member.mention}", delete_after=2)
 
     # ==========================================
-    # CONFIGURATION COMMANDS (require config_manage)
+    # CONFIGURATION COMMAND (require config_manage)
     # ==========================================
     @commands.command()
     async def toggle(self, ctx, feature: str):

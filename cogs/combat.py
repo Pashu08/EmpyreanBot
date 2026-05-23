@@ -11,7 +11,7 @@ import config
 print("[DEBUG] combat.py: Loading Combat cog...")
 
 # ==========================================
-# ENEMY RARITY SYSTEM (5 tiers)
+# ENEMY RARIY SYSTEM (5 tiers)
 # ==========================================
 RARITIES = {
     "Common":    {"chance": 45, "hp_mult": 1.0, "atk_mult": 1.0, "reward_mult": 1.0, "drop_chance": 0.05},

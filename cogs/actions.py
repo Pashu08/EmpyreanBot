@@ -357,7 +357,7 @@ class Actions(commands.Cog):
         await ctx.send(embed=embed)
 
     # ==========================================
-    # HYBRID COMMAND: OBSERVE
+    # HYBRID COMMAND:  OBSERVE
     # ==========================================
     @commands.hybrid_command(name="observe", description="Observe the world and refine your Ki.")
     @app_commands.checks.cooldown(1, 5.0)

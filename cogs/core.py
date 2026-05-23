@@ -150,7 +150,7 @@ class StartMenu(discord.ui.View):
         await self.handle_start(interaction, "Hermit")
 
 # ==========================================
-# MAIN COG
+# MAIN COGS
 # ==========================================
 class Core(commands.Cog):
     def __init__(self, bot):
