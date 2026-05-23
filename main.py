@@ -35,7 +35,7 @@ def log_error_to_file(error_message):
         pass
 
 # ==========================================
-# MONGODB DATABASE WRAPPER
+# MONGODB DATABASE WRAPPER (FIXED INDEXES)
 # ==========================================
 class MongoDBWrapper:
     def __init__(self, uri, db_name):
@@ -43,8 +43,8 @@ class MongoDBWrapper:
         self.db = None
         self.uri = uri
         self.db_name = db_name
-        
-        # Collections (replacing SQL tables)
+
+        # Collections
         self.users = None
         self.bot_settings = None
         self.admin_permissions = None
@@ -52,15 +52,15 @@ class MongoDBWrapper:
         self.banned_users = None
         self.inventory = None
         self.admin_logs = None
-        self.admins = None  # ADDED: for legacy admin commands
+        self.admins = None
 
     async def connect(self):
         if not self.uri:
             raise ValueError("MONGODB_URI not set")
-        
+
         self.client = AsyncIOMotorClient(self.uri)
         self.db = self.client[self.db_name]
-        
+
         # Initialize collections
         self.users = self.db.users
         self.bot_settings = self.db.bot_settings
@@ -69,18 +69,18 @@ class MongoDBWrapper:
         self.banned_users = self.db.banned_users
         self.inventory = self.db.inventory
         self.admin_logs = self.db.admin_logs
-        self.admins = self.db.admins  # ADDED: admins collection
-        
-        # Create indexes for better performance
-        await self.users.create_index("user_id", unique=True)
-        await self.bot_settings.create_index("setting_key", unique=True)
+        self.admins = self.db.admins
+
+        # Create indexes correctly (using list of tuples)
+        await self.users.create_index([("user_id", 1)], unique=True)
+        await self.bot_settings.create_index([("setting_key", 1)], unique=True)
         await self.admin_permissions.create_index([("user_id", 1), ("permission", 1)], unique=True)
-        await self.user_cooldowns.create_index("cooldown_key", unique=True)
-        await self.banned_users.create_index("user_id", unique=True)
+        await self.user_cooldowns.create_index([("cooldown_key", 1)], unique=True)
+        await self.banned_users.create_index([("user_id", 1)], unique=True)
         await self.inventory.create_index([("user_id", 1), ("item_name", 1)], unique=True)
-        await self.admin_logs.create_index("timestamp", -1)
-        await self.admins.create_index("user_id", unique=True)  # ADDED
-        
+        await self.admin_logs.create_index([("timestamp", -1)])
+        await self.admins.create_index([("user_id", 1)], unique=True)
+
         print("[DEBUG] MongoDB connected and indexes created")
         return self
 
@@ -91,40 +91,40 @@ class MongoDBWrapper:
     # ========== User Methods ==========
     async def fetch_user(self, user_id):
         return await self.users.find_one({"user_id": user_id})
-    
+
     async def user_exists(self, user_id):
         return await self.users.find_one({"user_id": user_id}) is not None
-    
+
     async def update_user(self, user_id, update_data):
         await self.users.update_one(
             {"user_id": user_id},
             {"$set": update_data},
             upsert=True
         )
-    
+
     async def get_user_stat(self, user_id, stat_name):
         user = await self.fetch_user(user_id)
         return user.get(stat_name) if user else None
-    
+
     async def update_user_stat(self, user_id, stat_name, value):
         await self.users.update_one(
             {"user_id": user_id},
             {"$set": {stat_name: value}},
             upsert=True
         )
-    
+
     # ========== Inventory Methods ==========
     async def get_inventory(self, user_id):
         cursor = self.inventory.find({"user_id": user_id})
         return await cursor.to_list(length=100)
-    
+
     async def add_item(self, user_id, item_name, quantity=1, bound=False):
         await self.inventory.update_one(
             {"user_id": user_id, "item_name": item_name},
             {"$inc": {"quantity": quantity}, "$set": {"bound": 1 if bound else 0}},
             upsert=True
         )
-    
+
     async def remove_item(self, user_id, item_name, quantity=1):
         item = await self.inventory.find_one({"user_id": user_id, "item_name": item_name})
         if not item or item.get("quantity", 0) < quantity:
@@ -137,11 +137,11 @@ class MongoDBWrapper:
                 {"$inc": {"quantity": -quantity}}
             )
         return True
-    
+
     async def has_item(self, user_id, item_name, quantity=1):
         item = await self.inventory.find_one({"user_id": user_id, "item_name": item_name})
         return item is not None and item.get("quantity", 0) >= quantity
-    
+
     # ========== Settings Methods ==========
     async def get_bot_setting(self, key, default=None):
         doc = await self.bot_settings.find_one({"setting_key": key})
@@ -155,44 +155,44 @@ class MongoDBWrapper:
         if isinstance(value, str) and value.isdigit():
             return int(value)
         return value
-    
+
     async def set_bot_setting(self, key, value):
         await self.bot_settings.update_one(
             {"setting_key": key},
             {"$set": {"setting_value": str(value)}},
             upsert=True
         )
-    
+
     # ========== Permission Methods ==========
     async def get_user_permissions(self, user_id):
         cursor = self.admin_permissions.find({"user_id": user_id})
         docs = await cursor.to_list(length=10)
         return [doc["permission"] for doc in docs]
-    
+
     async def add_user_permission(self, user_id, permission):
         await self.admin_permissions.update_one(
             {"user_id": user_id, "permission": permission},
             {"$set": {"user_id": user_id, "permission": permission}},
             upsert=True
         )
-    
+
     async def remove_user_permission(self, user_id, permission):
         await self.admin_permissions.delete_one({"user_id": user_id, "permission": permission})
-    
+
     # ========== Ban Methods ==========
     async def is_user_banned(self, user_id):
         return await self.banned_users.find_one({"user_id": user_id}) is not None
-    
+
     async def ban_user(self, user_id, reason, banned_by):
         await self.banned_users.update_one(
             {"user_id": user_id},
             {"$set": {"reason": reason, "banned_at": datetime.datetime.now().isoformat(), "banned_by": banned_by}},
             upsert=True
         )
-    
+
     async def unban_user(self, user_id):
         await self.banned_users.delete_one({"user_id": user_id})
-    
+
     # ========== Cooldown Methods ==========
     async def get_user_cooldown(self, cooldown_key):
         doc = await self.user_cooldowns.find_one({"cooldown_key": cooldown_key})
@@ -202,14 +202,14 @@ class MongoDBWrapper:
             except:
                 return None
         return None
-    
+
     async def set_user_cooldown(self, cooldown_key):
         await self.user_cooldowns.update_one(
             {"cooldown_key": cooldown_key},
             {"$set": {"last_used": datetime.datetime.now().isoformat()}},
             upsert=True
         )
-    
+
     # ========== Admin Log Methods ==========
     async def log_admin_action(self, admin_id, action, target_id=None, details=None):
         await self.admin_logs.insert_one({
@@ -219,30 +219,27 @@ class MongoDBWrapper:
             "details": details,
             "timestamp": datetime.datetime.now().isoformat()
         })
-    
+
     async def get_admin_logs(self, limit=10):
         cursor = self.admin_logs.find().sort("timestamp", -1).limit(limit)
         return await cursor.to_list(length=limit)
-    
-    # ========== Legacy Admin Methods (for admins collection) ==========
+
+    # ========== Legacy Admin Methods ==========
     async def get_admins(self):
-        """Get all admin user IDs from the admins collection."""
         cursor = self.admins.find({})
         admins = await cursor.to_list(length=100)
         return [admin["user_id"] for admin in admins]
-    
+
     async def add_admin(self, user_id):
-        """Add a user to the admins collection."""
         await self.admins.update_one(
             {"user_id": user_id},
             {"$set": {"user_id": user_id}},
             upsert=True
         )
-    
+
     async def remove_admin(self, user_id):
-        """Remove a user from the admins collection."""
         await self.admins.delete_one({"user_id": user_id})
-    
+
     # ========== Initialization ==========
     async def initialize_default_settings(self):
         default_settings = [
@@ -271,7 +268,7 @@ class MongoDBWrapper:
         print("[DEBUG] Default bot_settings initialized")
 
 # ==========================================
-# WEB DASHBOARD (IMPROVED)
+# WEB DASHBOARD
 # ==========================================
 class DashboardServer:
     def __init__(self, bot):
@@ -360,7 +357,7 @@ class DashboardServer:
         top_taels_players = await self.get_top_players("taels", 5)
         command_stats = await self.get_command_stats()
         admin_logs = await self.get_admin_logs(5)
-        
+
         cog_count = len(self.bot.cogs)
         cog_names = list(self.bot.cogs.keys())
         uptime = datetime.datetime.now() - self.start_time
@@ -418,7 +415,7 @@ class DashboardServer:
         <body>
             <div class="container">
                 <h1>🌿 Empyrean Ascent Bot Dashboard</h1>
-                
+
                 <div class="grid">
                     <div class="card">
                         <h2>🤖 Bot Status</h2>
@@ -431,7 +428,7 @@ class DashboardServer:
                         <div>👥 Registered Users: <strong>{user_count}</strong></div>
                         <div>⚠️ Last Error: <strong style="color: #ff6666;">{self.last_error[:50]}</strong></div>
                     </div>
-                    
+
                     <div class="card">
                         <h2>📁 Loaded Cogs</h2>
                         <div class="logs-container">
@@ -439,7 +436,7 @@ class DashboardServer:
                         </div>
                     </div>
                 </div>
-                
+
                 <div class="grid">
                     <div class="card">
                         <h2>✨ Top Ki Cultivators</h2>
@@ -448,7 +445,7 @@ class DashboardServer:
                             {self._generate_top_players_html(top_ki_players, "ki")}
                         </table>
                     </div>
-                    
+
                     <div class="card">
                         <h2>💰 Wealthiest Warriors</h2>
                         <table>
@@ -457,7 +454,7 @@ class DashboardServer:
                         </table>
                     </div>
                 </div>
-                
+
                 <div class="grid">
                     <div class="card">
                         <h2>⚙️ Command Usage</h2>
@@ -467,7 +464,7 @@ class DashboardServer:
                         </table>
                         <div class="stat-label" style="margin-top: 10px;">* Approximate counts</div>
                     </div>
-                    
+
                     <div class="card">
                         <h2>🔧 Recent Admin Actions</h2>
                         <div class="logs-container">
@@ -475,7 +472,7 @@ class DashboardServer:
                         </div>
                     </div>
                 </div>
-                
+
                 <div class="footer">
                     <button class="refresh-btn" onclick="location.reload()">🔄 Refresh</button>
                     <br>
@@ -549,19 +546,21 @@ class MurimBot(commands.Bot):
             return
 
         print("📦 Connecting to MongoDB...")
-        
-        mongodb_uri = os.environ.get("MONGODB_URI", getattr(config, "MONGODB_URI", None))
-        mongodb_db_name = os.environ.get("MONGODB_DB_NAME", getattr(config, "MONGODB_DB_NAME", "empyrean_bot"))
-        
+
+        mongodb_uri = os.environ.get("MONGODB_URI")
+        mongodb_db_name = os.environ.get("MONGODB_DB_NAME", "Empyrean-ascent")
+
         if not mongodb_uri:
             print("[ERROR] MONGODB_URI not set! Please set it in environment variables.")
             log_error_to_file("FATAL: MONGODB_URI not set")
             return
-        
+
+        print(f"[DEBUG] MongoDB URI found (length: {len(mongodb_uri)})")
+
         self.db = MongoDBWrapper(mongodb_uri, mongodb_db_name)
         await self.db.connect()
         await self.db.initialize_default_settings()
-        
+
         print("🔗 MongoDB Connection Established")
         print("[DEBUG] setup_hook: Database connection opened")
 
