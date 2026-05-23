@@ -35,54 +35,58 @@ class Status(commands.Cog):
         now = datetime.datetime.now()
         last_refresh = user_data.get('last_refresh')
         gains = {"ki": 0, "mastery": 0.0}
-        
+
         if not last_refresh:
             return user_data, gains, 0
-        
+
         try:
             last_dt = datetime.datetime.fromisoformat(last_refresh)
             hours_passed = (now - last_dt).total_seconds() / 3600
             if hours_passed <= 0:
                 return user_data, gains, 0
-            
+
             rank = user_data.get('rank', 'The Bound (Mortal)')
             profession = user_data.get('profession')
             background = user_data.get('background')
-            
+
             # Ki gains from AFK using constants
             ki_rate = AFK_KI_PER_HOUR.get(rank, 150)
             ki_gain = int(ki_rate * hours_passed)
             gains["ki"] = ki_gain
-            
+
             # Mastery gains from AFK
             mastery_multiplier = 1.15 if profession == "Instructor" else 1.0
             mastery_gain = AFK_MASTERY_PER_HOUR * hours_passed * mastery_multiplier
             gains["mastery"] = mastery_gain
-            
+
             # Apply gains
             max_stats = get_max_stats(rank)
             new_ki = min(user_data.get('ki', 0) + ki_gain, max_stats['ki_cap'])
             new_mastery = min(100.0, user_data.get('mastery', 0.0) + mastery_gain)
-            
+
             # Update stage based on new Ki
             new_stage = calculate_stage_from_ki(new_ki, max_stats['ki_cap'])
-            
-            # Update database
-            await self.bot.db.execute(
-                "UPDATE users SET ki = ?, mastery = ?, stage = ?, last_refresh = ? WHERE user_id = ?",
-                (new_ki, round(new_mastery, 2), new_stage, now.isoformat(), user_id)
+
+            # Update database using MongoDB
+            await self.bot.db.users.update_one(
+                {"user_id": user_id},
+                {"$set": {
+                    "ki": new_ki,
+                    "mastery": round(new_mastery, 2),
+                    "stage": new_stage,
+                    "last_refresh": now.isoformat()
+                }}
             )
-            await self.bot.db.commit()
-            
+
             # Update user_data dict
             user_data['ki'] = new_ki
             user_data['mastery'] = new_mastery
             user_data['stage'] = new_stage
             user_data['last_refresh'] = now.isoformat()
-            
+
             print(f"[DEBUG] status._process_afk_gains: User {user_id} - {hours_passed:.1f}h away, gained +{ki_gain} Ki, +{mastery_gain:.1f}% Mastery")
             return user_data, gains, hours_passed
-            
+
         except Exception as e:
             print(f"[DEBUG] status._process_afk_gains: Error for user {user_id}: {e}")
             return user_data, gains, 0
@@ -118,7 +122,7 @@ class Status(commands.Cog):
             hours = int(hours_passed)
             minutes = int((hours_passed - hours) * 60)
             time_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
-            
+
             embed = discord.Embed(
                 title="🌙 Welcome Back!",
                 description=f"You were away for **{time_str}**.\n\n"
@@ -151,11 +155,11 @@ class Status(commands.Cog):
 
         rank = user_data.get('rank', 'The Bound (Mortal)')
         max_stats = get_max_stats(rank)
-        
+
         # Calculate stage based on current Ki
         ki = user_data.get('ki', 0)
         stage = calculate_stage_from_ki(ki, max_stats['ki_cap'])
-        
+
         bg = user_data.get('background', 'Unknown')
         hp = user_data.get('hp', 0)
         vitality = user_data.get('vitality', 0)

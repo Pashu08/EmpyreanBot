@@ -4,23 +4,17 @@ from discord.ext import commands
 from utils import db as db_utils
 import config
 
+print("[DEBUG] checks.py: Loading command guards...")
+
 # ==========================================
-# HELPER: Get setting from database
+# HELPER: Get setting from database (MongoDB version)
 # ==========================================
 async def _get_setting(bot, key, default=None):
+    """Get a setting from bot_settings collection."""
     try:
-        async with bot.db.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", (key,)) as cursor:
-            row = await cursor.fetchone()
-            if row:
-                val = row[0]
-                if val.isdigit():
-                    return int(val)
-                if val.lower() in ('true', 'false'):
-                    return val.lower() == 'true'
-                return val
+        return await bot.db.get_bot_setting(key, default)
     except:
-        pass
-    return default
+        return default
 
 # ==========================================
 # 1. REGISTERED CHECK
@@ -79,7 +73,6 @@ def not_in_combat():
     """Rejects if player is currently in a hunt (has CombatView open)."""
     async def predicate(ctx):
         print(f"[DEBUG] checks.not_in_combat: Checking user {ctx.author.id}")
-        # Check if user has an active combat view stored in bot memory
         if hasattr(ctx.bot, 'active_combats') and ctx.author.id in ctx.bot.active_combats:
             await ctx.send("❌ You are already in combat! Finish your current fight first.", ephemeral=True)
             return False
@@ -90,14 +83,13 @@ def not_in_combat():
 # 5. COOLDOWN CHECK (from bot_settings)
 # ==========================================
 def cooldown_check(command_name):
-    """Reads cooldown from bot_settings table instead of hardcoded."""
+    """Reads cooldown from bot_settings collection instead of hardcoded."""
     async def predicate(ctx):
         print(f"[DEBUG] checks.cooldown_check: Checking {command_name} for user {ctx.author.id}")
         cooldown_key = f"cooldown_{command_name}"
         seconds = await _get_setting(ctx.bot, cooldown_key, None)
         if seconds is None:
-            return True  # No cooldown set, allow command
-        # Check if user has a cooldown tracker
+            return True
         if not hasattr(ctx.bot, 'command_cooldowns'):
             ctx.bot.command_cooldowns = {}
         user_key = f"{command_name}_{ctx.author.id}"
@@ -182,18 +174,12 @@ def min_rank(required_rank):
 # 9. NOT BANNED
 # ==========================================
 def not_banned():
-    """Checks if user is not in the banned_users table."""
+    """Checks if user is not in the banned_users collection."""
     async def predicate(ctx):
         print(f"[DEBUG] checks.not_banned: Checking user {ctx.author.id}")
-        try:
-            async with ctx.bot.db.execute("SELECT reason FROM banned_users WHERE user_id = ?", (ctx.author.id,)) as cursor:
-                row = await cursor.fetchone()
-                if row:
-                    reason = row[0]
-                    await ctx.send(f"❌ You are banned from using this bot. Reason: {reason}", ephemeral=True)
-                    return False
-        except:
-            pass
+        if await db_utils.is_user_banned(ctx.bot.db, ctx.author.id):
+            await ctx.send("❌ You are banned from using this bot.", ephemeral=True)
+            return False
         return True
     return commands.check(predicate)
 
@@ -204,31 +190,23 @@ def cooldown_per_user(command_name, seconds):
     """Per-user cooldown stored in database (survives bot restart)."""
     async def predicate(ctx):
         print(f"[DEBUG] checks.cooldown_per_user: Checking {command_name} for user {ctx.author.id}")
-        table_name = "user_cooldowns"
-        # Ensure table exists (will be created in main.py)
         user_key = f"{command_name}_{ctx.author.id}"
-        now = datetime.datetime.now().isoformat()
-        
-        async with ctx.bot.db.execute(
-            "SELECT last_used FROM user_cooldowns WHERE cooldown_key = ?",
-            (user_key,)
-        ) as cursor:
-            row = await cursor.fetchone()
-        
-        if row:
-            last_used = datetime.datetime.fromisoformat(row[0])
-            elapsed = (datetime.datetime.now() - last_used).total_seconds()
+        now = datetime.datetime.now()
+
+        # Get existing cooldown
+        last_used = await ctx.bot.db.get_user_cooldown(user_key)
+
+        if last_used:
+            elapsed = (now - last_used).total_seconds()
             if elapsed < seconds:
                 remaining = int(seconds - elapsed)
                 msg = await _get_setting(ctx.bot, "msg_cooldown", config.MSG_COOLDOWN)
                 await ctx.send(msg.format(seconds=remaining), ephemeral=True)
                 return False
-        
-        # Update or insert
-        await ctx.bot.db.execute(
-            "INSERT OR REPLACE INTO user_cooldowns (cooldown_key, last_used) VALUES (?, ?)",
-            (user_key, now)
-        )
-        await ctx.bot.db.commit()
+
+        # Set new cooldown
+        await ctx.bot.db.set_user_cooldown(user_key)
         return True
     return commands.check(predicate)
+
+print("[DEBUG] checks.py: Command guards loaded successfully")

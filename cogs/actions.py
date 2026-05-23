@@ -160,13 +160,11 @@ class Actions(commands.Cog):
     # ==========================================
     class ChoiceEventView(discord.ui.View):
         def __init__(self, ctx, event_data):
-            # Increased timeout to 90 seconds (Issue #6)
             super().__init__(timeout=90)
             self.ctx = ctx
             self.event_data = event_data
             self.choices = event_data["choices"]
 
-            # Dynamically create buttons with meaningful labels (Issues #7 & #8)
             for key, choice in self.choices.items():
                 button = discord.ui.Button(
                     label=choice["text"],
@@ -181,7 +179,6 @@ class Actions(commands.Cog):
                 if interaction.user.id != self.ctx.author.id:
                     return await interaction.response.send_message("❌ This event is not for you.", ephemeral=True)
                 result = self.choices[key]["result"]
-                # Send result as an embed (Issue #4)
                 embed = discord.Embed(
                     title="✨ Event Outcome",
                     description=result,
@@ -192,8 +189,7 @@ class Actions(commands.Cog):
             return callback
 
     async def _maybe_choice_event(self, ctx):
-        """5% chance to trigger a random choice event (Issue #1 - reduced from 10%)."""
-        if random.random() > 0.05:  # Changed from 0.1 to 0.05
+        if random.random() > 0.05:
             return None
 
         events = [
@@ -238,17 +234,20 @@ class Actions(commands.Cog):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
 
         user_id = ctx.author.id
+        db = self.bot.db
 
-        async with self.bot.db.execute(
-            "SELECT vitality, taels, rank, background, mastery, active_tech FROM users WHERE user_id=?",
-            (user_id,)
-        ) as cursor:
-            user = await cursor.fetchone()
-
+        # Fetch user data using MongoDB wrapper
+        user = await db.fetch_user(user_id)
         if not user:
             return await ctx.send(config.MSG_NOT_REGISTERED, ephemeral=True)
 
-        vit, taels, rank, bg, mastery, tech = user
+        vit = user.get("vitality", 0)
+        taels = user.get("taels", 0)
+        rank = user.get("rank", "The Bound (Mortal)")
+        bg = user.get("background", "")
+        mastery = user.get("mastery", 0.0)
+        tech = user.get("active_tech", "None")
+
         max_stats = get_max_stats(rank)
         max_vit = max_stats["max_vit"]
 
@@ -279,12 +278,9 @@ class Actions(commands.Cog):
                 new_mastery = min(100.0, mastery + mastery_gain)
                 mastery_msg = f"\n✨ **Laborer's Insight:** +{mastery_gain}% Mastery in **{tech}**"
 
-        # Track changes for event display
-        ki_before = await get_user_stat(self.bot.db, user_id, "ki") or 0
-        hp_before = await get_user_stat(self.bot.db, user_id, "hp") or 0
-        vit_before = new_vit
+        ki_before = user.get("ki", 0)
+        hp_before = user.get("hp", 0)
 
-        # Random choice event (5% chance)
         choice_event = await self._maybe_choice_event(ctx)
         if choice_event:
             embed = discord.Embed(title=choice_event["title"], description=choice_event["description"], color=format_embed_color("gold"))
@@ -292,15 +288,15 @@ class Actions(commands.Cog):
             await ctx.send(embed=embed, view=view)
             return
 
-        # Random normal event (20% chance)
         event_text = None
         event_effects = {}
         event_changes = []
-        if random.random() <= 0.2:  # 20% chance for normal event
+        if random.random() <= 0.2:
             event_text, event_effects = roll_random_event()
+            update_data = {}
             if "ki" in event_effects:
                 new_ki = min(max_stats["ki_cap"], ki_before + event_effects["ki"])
-                await update_user_stat(self.bot.db, user_id, "ki", new_ki)
+                update_data["ki"] = new_ki
                 event_changes.append(f"✨ {event_effects['ki']:+} Ki")
             if "taels" in event_effects:
                 new_taels += event_effects["taels"]
@@ -310,23 +306,27 @@ class Actions(commands.Cog):
                 event_changes.append(f"❤️ {event_effects['vit']:+} Vitality")
             if "hp" in event_effects:
                 new_hp = min(max_stats["max_hp"], hp_before + event_effects["hp"])
-                await update_user_stat(self.bot.db, user_id, "hp", new_hp)
+                update_data["hp"] = new_hp
                 event_changes.append(f"🩸 {event_effects['hp']:+} HP")
             if "mastery" in event_effects:
                 new_mastery = min(100.0, new_mastery + event_effects["mastery"])
                 event_changes.append(f"📖 {event_effects['mastery']:+}% Mastery")
             if "combat_mastery" in event_effects:
-                new_cm = (await get_user_stat(self.bot.db, user_id, "combat_mastery") or 0) + event_effects["combat_mastery"]
-                await update_user_stat(self.bot.db, user_id, "combat_mastery", new_cm)
+                new_cm = user.get("combat_mastery", 0) + event_effects["combat_mastery"]
+                update_data["combat_mastery"] = new_cm
                 event_changes.append(f"⚔️ {event_effects['combat_mastery']:+} Combat Mastery")
+            
+            if update_data:
+                await db.update_user(user_id, update_data)
 
-        await self.bot.db.execute(
-            "UPDATE users SET vitality=?, taels=?, mastery=? WHERE user_id=?",
-            (new_vit, new_taels, new_mastery, user_id)
-        )
-        await self.bot.db.commit()
+        # Update user data
+        await db.update_user(user_id, {
+            "vitality": new_vit,
+            "taels": new_taels,
+            "mastery": new_mastery
+        })
 
-        # Update stage based on new Ki (Issue #5)
+        # Update stage based on new Ki
         new_ki = await get_user_stat(self.bot.db, user_id, "ki") or 0
         await self._update_stage(user_id, rank, new_ki)
 
@@ -370,17 +370,18 @@ class Actions(commands.Cog):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
 
         user_id = ctx.author.id
+        db = self.bot.db
 
-        async with self.bot.db.execute(
-            "SELECT vitality, ki, rank, mastery, active_tech FROM users WHERE user_id=?",
-            (user_id,)
-        ) as cursor:
-            user = await cursor.fetchone()
-
+        user = await db.fetch_user(user_id)
         if not user:
             return await ctx.send(config.MSG_NOT_REGISTERED, ephemeral=True)
 
-        vit, ki, rank, mastery, tech = user
+        vit = user.get("vitality", 0)
+        ki = user.get("ki", 0)
+        rank = user.get("rank", "The Bound (Mortal)")
+        mastery = user.get("mastery", 0.0)
+        tech = user.get("active_tech", "None")
+
         max_stats = get_max_stats(rank)
         max_vit = max_stats["max_vit"]
         ki_cap = max_stats["ki_cap"]
@@ -411,11 +412,8 @@ class Actions(commands.Cog):
             new_mastery = min(100.0, mastery + mastery_gain)
             mastery_msg = f"\n📖 **Martial Insight:** +{mastery_gain}% Mastery in **{tech}**"
 
-        # Track changes for event display
-        hp_before = await get_user_stat(self.bot.db, user_id, "hp") or 0
-        vit_before = new_vit
+        hp_before = user.get("hp", 0)
 
-        # Random choice event (5% chance)
         choice_event = await self._maybe_choice_event(ctx)
         if choice_event:
             embed = discord.Embed(title=choice_event["title"], description=choice_event["description"], color=format_embed_color("gold"))
@@ -423,11 +421,10 @@ class Actions(commands.Cog):
             await ctx.send(embed=embed, view=view)
             return
 
-        # Random normal event (20% chance)
         event_text = None
         event_effects = {}
         event_changes = []
-        if random.random() <= 0.2:  # 20% chance for normal event
+        if random.random() <= 0.2:
             event_text, event_effects = roll_random_event()
             if "ki" in event_effects:
                 new_ki = min(ki_cap, new_ki + event_effects["ki"])
@@ -437,19 +434,18 @@ class Actions(commands.Cog):
                 event_changes.append(f"❤️ {event_effects['vit']:+} Vitality")
             if "hp" in event_effects:
                 new_hp = min(max_stats["max_hp"], hp_before + event_effects["hp"])
-                await update_user_stat(self.bot.db, user_id, "hp", new_hp)
+                await db.update_user(user_id, {"hp": new_hp})
                 event_changes.append(f"🩸 {event_effects['hp']:+} HP")
             if "mastery" in event_effects:
                 new_mastery = min(100.0, new_mastery + event_effects["mastery"])
                 event_changes.append(f"📖 {event_effects['mastery']:+}% Mastery")
 
-        await self.bot.db.execute(
-            "UPDATE users SET vitality=?, ki=?, mastery=? WHERE user_id=?",
-            (new_vit, new_ki, new_mastery, user_id)
-        )
-        await self.bot.db.commit()
+        await db.update_user(user_id, {
+            "vitality": new_vit,
+            "ki": new_ki,
+            "mastery": new_mastery
+        })
 
-        # Update stage based on new Ki (Issue #5)
         await self._update_stage(user_id, rank, new_ki)
 
         milestone_msg = await self._process_mastery_milestones(ctx, user_id, tech, mastery, new_mastery)
@@ -491,34 +487,31 @@ class Actions(commands.Cog):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
 
         user_id = ctx.author.id
+        db = self.bot.db
 
-        async with self.bot.db.execute(
-            "SELECT vitality, active_tech, mastery, rank FROM users WHERE user_id=?",
-            (user_id,)
-        ) as cursor:
-            user = await cursor.fetchone()
-
+        user = await db.fetch_user(user_id)
         if not user:
             return await ctx.send(config.MSG_NOT_REGISTERED, ephemeral=True)
 
-        vit, tech, mastery, rank = user
+        vit = user.get("vitality", 0)
+        tech = user.get("active_tech", "None")
+        mastery = user.get("mastery", 0.0)
+        rank = user.get("rank", "The Bound (Mortal)")
+
         max_stats = get_max_stats(rank)
         max_vit = max_stats["max_vit"]
 
         vit_cost = await get_bot_setting(self.bot.db, "actions_vit_cost_comprehend", 40)
 
-        # Check technique FIRST, before any cooldown (Issue #2)
         if tech == "None":
             return await ctx.send("❌ You possess no martial technique to comprehend.", ephemeral=True)
 
-        # Cooldown check (30 minutes) – moved here so it only applies if user has a technique
-        # Using manual cooldown check instead of decorator for better control
         cooldown_key = f"comprehend_{user_id}"
         if hasattr(self.bot, 'command_cooldowns'):
             last_used = self.bot.command_cooldowns.get(cooldown_key)
             if last_used:
                 elapsed = (datetime.datetime.now() - last_used).total_seconds()
-                if elapsed < 1800:  # 30 minutes
+                if elapsed < 1800:
                     remaining = int(1800 - elapsed)
                     await ctx.send(f"⏳ You need to wait **{remaining} seconds** before using comprehend again.", ephemeral=True)
                     return
@@ -536,10 +529,8 @@ class Actions(commands.Cog):
         new_mastery = min(100.0, mastery + gain)
         actual_gain = round(new_mastery - mastery, 2)
 
-        # Store cooldown
         self.bot.command_cooldowns[cooldown_key] = datetime.datetime.now()
 
-        # Random choice event (5% chance)
         choice_event = await self._maybe_choice_event(ctx)
         if choice_event:
             embed = discord.Embed(title=choice_event["title"], description=choice_event["description"], color=format_embed_color("gold"))
@@ -547,21 +538,19 @@ class Actions(commands.Cog):
             await ctx.send(embed=embed, view=view)
             return
 
-        # Random normal event (20% chance)
         event_text = None
         event_effects = {}
         event_changes = []
-        if random.random() <= 0.2:  # 20% chance for normal event
+        if random.random() <= 0.2:
             event_text, event_effects = roll_random_event()
             if "vit" in event_effects:
                 new_vit = max(0, new_vit + event_effects["vit"])
                 event_changes.append(f"❤️ {event_effects['vit']:+} Vitality")
 
-        await self.bot.db.execute(
-            "UPDATE users SET vitality=?, mastery=? WHERE user_id=?",
-            (new_vit, new_mastery, user_id)
-        )
-        await self.bot.db.commit()
+        await db.update_user(user_id, {
+            "vitality": new_vit,
+            "mastery": new_mastery
+        })
 
         milestone_msg = await self._process_mastery_milestones(ctx, user_id, tech, mastery, new_mastery)
 

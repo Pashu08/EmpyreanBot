@@ -17,11 +17,9 @@ class ShopView(discord.ui.View):
         self.ctx = ctx
         self.user_bg = user_bg
 
-        # Add buttons for each shop
         self.add_item(ShopButton("Apothecary", "💊", discord.ButtonStyle.primary))
         self.add_item(ShopButton("Provisioner", "🍱", discord.ButtonStyle.primary))
 
-        # Only show Shady Dealer to Outcasts
         if user_bg == "Outcast":
             self.add_item(ShopButton("Shady Dealer", "👺", discord.ButtonStyle.danger))
 
@@ -34,7 +32,6 @@ class ShopButton(discord.ui.Button):
         if interaction.user.id != self.view.ctx.author.id:
             return await interaction.response.send_message("❌ This menu is not for you.", ephemeral=True)
 
-        # Get items for this shop
         items = []
         for item_name, data in SHOP_ITEMS.items():
             if data.get("shop") == self.shop_name:
@@ -43,21 +40,18 @@ class ShopButton(discord.ui.Button):
         if not items:
             return await interaction.response.send_message(f"❌ {self.shop_name} has no items available.", ephemeral=True)
 
-        # Get player's Taels
         taels = await get_user_stat(interaction.client.db, interaction.user.id, "taels") or 0
 
-        # Build embed
         embed = discord.Embed(
             title=f"🏪 {self.shop_name}",
             description=f"💰 Your Taels: **{taels}**\n\nUse `!buy <item> [quantity]` to purchase.\nExample: `!buy Spirit Gathering Dan 2`",
             color=format_embed_color("main")
         )
 
-        for item_name, price, desc in items[:10]:  # Max 10 items per shop
+        for item_name, price, desc in items[:10]:
             embed.add_field(name=f"{item_name} — {price} Taels", value=desc, inline=False)
 
         embed.set_footer(text="Click another button to browse different shops.")
-
         await interaction.response.edit_message(embed=embed, view=self.view)
 
 # ==========================================
@@ -66,7 +60,7 @@ class ShopButton(discord.ui.Button):
 class Shop(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.give_cooldowns = {}  # user_id -> datetime
+        self.give_cooldowns = {}
         print("[DEBUG] Shop cog initialized")
 
     async def _is_feature_enabled(self, ctx):
@@ -109,7 +103,6 @@ class Shop(commands.Cog):
         if await is_user_banned(self.bot.db, ctx.author.id):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
 
-        # Get user's background to check for Shady Dealer access
         user_bg = await get_user_stat(self.bot.db, ctx.author.id, "background") or "None"
         taels = await get_user_stat(self.bot.db, ctx.author.id, "taels") or 0
 
@@ -135,7 +128,6 @@ class Shop(commands.Cog):
         if await is_user_banned(self.bot.db, ctx.author.id):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
 
-        # Parse arguments: quantity is last word if it's a number
         parts = args.strip().split()
         if not parts:
             return await ctx.send("❌ Please specify an item to buy. Example: `!buy Spirit Gathering Dan 2`", ephemeral=True)
@@ -150,7 +142,6 @@ class Shop(commands.Cog):
         if not item_name:
             return await ctx.send("❌ Please specify an item to buy. Example: `!buy Spirit Gathering Dan 2`", ephemeral=True)
 
-        # Find item in SHOP_ITEMS (case-insensitive)
         item_key = None
         item_data = None
         for key, data in SHOP_ITEMS.items():
@@ -166,18 +157,15 @@ class Shop(commands.Cog):
         shop_name = item_data.get("shop", "Unknown")
         total_cost = price * quantity
 
-        # Check if player can buy from this shop (Outcast restriction)
         if shop_name == "Shady Dealer":
             user_bg = await get_user_stat(self.bot.db, ctx.author.id, "background")
             if user_bg != "Outcast":
                 return await ctx.send("❌ Only **Outcasts** can buy from the Shady Dealer.", ephemeral=True)
 
-        # Check Taels
         taels = await get_user_stat(self.bot.db, ctx.author.id, "taels") or 0
         if taels < total_cost:
             return await ctx.send(f"❌ You need **{total_cost}** Taels (you have {taels}).", ephemeral=True)
 
-        # Confirm for expensive items (>500 Taels)
         if total_cost > 500:
             view = discord.ui.View(timeout=30)
             confirm_btn = discord.ui.Button(label="✅ Confirm", style=discord.ButtonStyle.success)
@@ -206,25 +194,22 @@ class Shop(commands.Cog):
         await self._process_buy(ctx, item_key, quantity, total_cost, shop_name)
 
     async def _process_buy(self, ctx, item_key, quantity, total_cost, shop_name):
-        """Deduct Taels and add item to inventory."""
+        """Deduct Taels and add item to inventory using MongoDB."""
         print(f"[DEBUG] shop._process_buy: {ctx.author.id} buying {quantity}x {item_key}")
 
         # Deduct Taels
         new_taels = (await get_user_stat(self.bot.db, ctx.author.id, "taels") or 0) - total_cost
         await update_user_stat(self.bot.db, ctx.author.id, "taels", new_taels)
 
-        # Check if item is bound (Blood-Burning Catalyst is bound)
         is_bound = 1 if item_key == "Blood-Burning Catalyst" else 0
 
-        # Add to inventory
         db = self.bot.db
         try:
-            await db.execute(
-                "INSERT INTO inventory (user_id, item_name, quantity, bound) VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(user_id, item_name) DO UPDATE SET quantity = quantity + ?",
-                (ctx.author.id, item_key, quantity, is_bound, quantity)
+            await db.inventory.update_one(
+                {"user_id": ctx.author.id, "item_name": item_key},
+                {"$inc": {"quantity": quantity}, "$set": {"bound": is_bound}},
+                upsert=True
             )
-            await db.commit()
         except Exception as e:
             print(f"[DEBUG] shop._process_buy: Error adding item to inventory: {e}")
             await ctx.send("❌ An error occurred while processing your purchase. Please try again.", ephemeral=True)
@@ -312,7 +297,6 @@ class Shop(commands.Cog):
         if await is_user_banned(self.bot.db, ctx.author.id):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
 
-        # Find item in inventory (case‑insensitive)
         inv = await get_inventory(self.bot.db, ctx.author.id)
         target_item = None
         for item in inv:
@@ -322,26 +306,22 @@ class Shop(commands.Cog):
         if not target_item:
             return await ctx.send(f"❌ You don't have `{item_name}`.", ephemeral=True)
 
-        # Get item effect from SHOP_ITEMS
         item_key = target_item['name']
         item_data = SHOP_ITEMS.get(item_key)
         if not item_data:
             return await ctx.send(f"❓ `{item_key}` has no known effect.", ephemeral=True)
 
-        # Apply effect
         db = self.bot.db
         user_id = ctx.author.id
         rank = await get_user_stat(db, user_id, "rank") or "The Bound (Mortal)"
         max_stats = get_max_stats(rank)
         effect = item_data.get("effect", {})
 
-        # Get current stats
         ki = await get_user_stat(db, user_id, "ki") or 0
         hp = await get_user_stat(db, user_id, "hp") or 0
         vit = await get_user_stat(db, user_id, "vitality") or 0
         mastery = await get_user_stat(db, user_id, "mastery") or 0.0
 
-        # Apply changes
         new_ki = ki
         new_hp = hp
         new_vit = vit
@@ -365,13 +345,11 @@ class Shop(commands.Cog):
             new_mastery = min(100.0, mastery + effect["mastery"])
             effect_msg += f"📖 +{effect['mastery']}% Mastery. "
 
-        # Update database
         await update_user_stat(db, user_id, "ki", new_ki)
         await update_user_stat(db, user_id, "hp", new_hp)
         await update_user_stat(db, user_id, "vitality", new_vit)
         await update_user_stat(db, user_id, "mastery", new_mastery)
 
-        # Remove one instance of the item
         await remove_item(db, user_id, item_key, 1)
 
         embed = discord.Embed(
@@ -393,7 +371,6 @@ class Shop(commands.Cog):
         if await is_user_banned(self.bot.db, ctx.author.id):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
 
-        # Check if item exists in inventory
         inv = await get_inventory(self.bot.db, ctx.author.id)
         target_item = None
         for item in inv:
@@ -403,25 +380,22 @@ class Shop(commands.Cog):
         if not target_item:
             return await ctx.send(f"❌ You don't have `{item_name}`.", ephemeral=True)
 
-        # Bound items cannot be sold
         if target_item.get('bound'):
             return await ctx.send("❌ Bound items cannot be sold.", ephemeral=True)
 
         if target_item['quantity'] < quantity:
             return await ctx.send(f"❌ You only have {target_item['quantity']} of that item.", ephemeral=True)
 
-        # Get price from SHOP_ITEMS
         item_key = target_item['name']
         item_data = SHOP_ITEMS.get(item_key)
         if not item_data:
             return await ctx.send(f"❓ Cannot determine price for {item_key}.", ephemeral=True)
 
         price = item_data.get("price", 0)
-        sell_price = int(price * quantity * 0.5)  # half price
+        sell_price = int(price * quantity * 0.5)
         if sell_price < 1:
             sell_price = 1
 
-        # Add Taels and remove item
         new_taels = (await get_user_stat(self.bot.db, ctx.author.id, "taels") or 0) + sell_price
         await update_user_stat(self.bot.db, ctx.author.id, "taels", new_taels)
         await remove_item(self.bot.db, ctx.author.id, item_key, quantity)
@@ -444,20 +418,16 @@ class Shop(commands.Cog):
             return
         if await is_user_banned(self.bot.db, ctx.author.id):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
-        # Check if recipient is banned
         if await is_user_banned(self.bot.db, recipient.id):
             return await ctx.send("❌ You cannot give items to a banned user.", ephemeral=True)
 
-        # Restriction 1: Cannot give to self
         if recipient.id == ctx.author.id:
             return await ctx.send("❌ You cannot give items to yourself.", ephemeral=True)
 
-        # Restriction 2: Minimum rank (Third-Rate Warrior)
         rank = await get_user_stat(self.bot.db, ctx.author.id, "rank") or "The Bound (Mortal)"
         if "Third-Rate" not in rank and "Second-Rate" not in rank and "First-Rate" not in rank and "Peak Master" not in rank:
             return await ctx.send("❌ You must be at least **Third-Rate Warrior** to give items.", ephemeral=True)
 
-        # Restriction 3: Daily give limit (3 per day)
         today = datetime.datetime.now().date().isoformat()
         give_date = await get_user_stat(self.bot.db, ctx.author.id, "daily_give_date")
         give_count = await get_user_stat(self.bot.db, ctx.author.id, "daily_give_count") or 0
@@ -468,14 +438,12 @@ class Shop(commands.Cog):
         if give_count >= 3:
             return await ctx.send("❌ You have reached your daily give limit (3). Try again tomorrow.", ephemeral=True)
 
-        # Restriction 4: Cooldown (5 minutes)
         if ctx.author.id in self.give_cooldowns:
             last_used = self.give_cooldowns[ctx.author.id]
             if datetime.datetime.now() < last_used:
                 remaining = int((last_used - datetime.datetime.now()).total_seconds())
                 return await ctx.send(f"⏳ Please wait {remaining} seconds before using `!give` again.", ephemeral=True)
 
-        # Check if item exists in inventory and is not bound
         inv = await get_inventory(self.bot.db, ctx.author.id)
         target_item = None
         for item in inv:
@@ -491,7 +459,6 @@ class Shop(commands.Cog):
         if target_item['quantity'] < quantity:
             return await ctx.send(f"❌ You only have {target_item['quantity']} of that item.", ephemeral=True)
 
-        # Remove from giver, add to recipient
         try:
             await remove_item(self.bot.db, ctx.author.id, target_item['name'], quantity)
             for _ in range(quantity):
@@ -501,7 +468,6 @@ class Shop(commands.Cog):
             await ctx.send("❌ An error occurred while giving the item. Please try again.", ephemeral=True)
             return
 
-        # Update daily give count and cooldown
         await update_user_stat(self.bot.db, ctx.author.id, "daily_give_count", give_count + 1)
         self.give_cooldowns[ctx.author.id] = datetime.datetime.now() + datetime.timedelta(minutes=5)
 

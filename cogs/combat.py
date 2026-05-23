@@ -5,7 +5,7 @@ import asyncio
 import datetime
 from utils.helpers import format_embed_color, has_meridian_damage
 from utils.db import get_bot_setting, is_user_banned, get_user_stat, update_user_stat, add_item, remove_item
-from utils.constants import ENEMIES, SHOP_ITEMS
+from utils.constants import ENEMIES, SHOP_ITEMS, TECHNIQUES
 import config
 
 print("[DEBUG] combat.py: Loading Combat cog...")
@@ -65,41 +65,45 @@ class LeaderboardView(discord.ui.View):
 
     async def get_leaderboard_embed(self, mode):
         db = self.bot.db
+        collection = db.users
+        
         if mode == "total_hunts":
-            order = "hunt_total DESC"
+            sort_field = "hunt_total"
+            sort_order = -1
             title = "🏆 Most Hunts (Lifetime)"
-            value_col = "hunt_total"
+            value_field = "hunt_total"
         elif mode == "highest_damage":
-            order = "hunt_damage_max DESC"
+            sort_field = "hunt_damage_max"
+            sort_order = -1
             title = "💥 Highest Single Hit Damage"
-            value_col = "hunt_damage_max"
+            value_field = "hunt_damage_max"
         elif mode == "fastest_kill":
-            order = "hunt_fastest_turns ASC"
+            sort_field = "hunt_fastest_turns"
+            sort_order = 1
             title = "⚡ Fastest Kill (least turns)"
-            value_col = "hunt_fastest_turns"
+            value_field = "hunt_fastest_turns"
         elif mode == "elite_kills":
-            order = "hunt_elite_kills DESC"
+            sort_field = "hunt_elite_kills"
+            sort_order = -1
             title = "👑 Elite & Boss Kills"
-            value_col = "hunt_elite_kills"
+            value_field = "hunt_elite_kills"
         else:
-            order = "hunt_taels_earned DESC"
+            sort_field = "hunt_taels_earned"
+            sort_order = -1
             title = "💰 Total Taels from Hunting"
-            value_col = "hunt_taels_earned"
+            value_field = "hunt_taels_earned"
 
-        async with db.execute(f"""
-            SELECT user_id, {value_col} FROM users
-            WHERE {value_col} IS NOT NULL AND {value_col} > 0
-            ORDER BY {order}
-            LIMIT 10
-        """) as cursor:
-            rows = await cursor.fetchall()
+        cursor = collection.find({value_field: {"$gt": 0}}).sort(sort_field, sort_order).limit(10)
+        rows = await cursor.to_list(length=10)
 
         embed = discord.Embed(title=title, color=format_embed_color("main"))
         if not rows:
             embed.description = "No data yet. Go hunt!"
         else:
             desc = ""
-            for i, (uid, val) in enumerate(rows, 1):
+            for i, doc in enumerate(rows, 1):
+                uid = doc.get("user_id")
+                val = doc.get(value_field, 0)
                 user = self.bot.get_user(uid)
                 name = user.display_name if user else f"<@{uid}>"
                 if mode == "fastest_kill":
@@ -151,7 +155,7 @@ class CombatView(discord.ui.View):
         self.color = color
         self.lock = asyncio.Lock()
         self.ended = False
-        self.pre_hunt_stats = pre_hunt_stats   # original HP/Vit to restore after hunt
+        self.pre_hunt_stats = pre_hunt_stats
 
         # player_data: (user_id, hp, vitality, ki, mastery, active_tech, rank, combat_mastery, taels)
         self.player = list(player_data)
@@ -222,7 +226,6 @@ class CombatView(discord.ui.View):
             tael_loss = max(1, int(self.player[8] * 0.10))
             new_taels = max(0, self.player[8] - tael_loss)
             await update_user_stat(db, user_id, "taels", new_taels)
-            # Apply meridian damage (10 minutes)
             debuff = (datetime.datetime.now() + datetime.timedelta(minutes=10)).isoformat()
             await update_user_stat(db, user_id, "meridian_damage", debuff)
             embed = discord.Embed(
@@ -238,25 +241,25 @@ class CombatView(discord.ui.View):
             cm_bonus = 1 + (self.player[7] * 0.005)
             final_reward = int(base_reward * mult * cm_bonus)
 
-            # Update Taels
             new_taels = self.player[8] + final_reward
             await update_user_stat(db, user_id, "taels", new_taels)
 
-            # Update Combat Mastery
             new_cm = self.player[7] + 2.0
             await update_user_stat(db, user_id, "combat_mastery", new_cm)
 
-            # Update hunt stats
-            await db.execute("UPDATE users SET hunt_total = COALESCE(hunt_total, 0) + 1 WHERE user_id = ?", (user_id,))
-            await db.execute("UPDATE users SET hunt_taels_earned = COALESCE(hunt_taels_earned, 0) + ? WHERE user_id = ?", (final_reward, user_id))
-            await db.execute("UPDATE users SET hunt_damage_max = MAX(COALESCE(hunt_damage_max, 0), ?) WHERE user_id = ?", (self.last_damage, user_id))
-            await db.execute("UPDATE users SET hunt_fastest_turns = MIN(COALESCE(hunt_fastest_turns, 999), ?) WHERE user_id = ?", (self.turn, user_id))
-            # Elite kill bonus (if rarity is Elite or higher)
-            if self.rarity["name"] in ("Elite","Master","Grandmaster","Mythical"):
-                await db.execute("UPDATE users SET hunt_elite_kills = COALESCE(hunt_elite_kills, 0) + 1 WHERE user_id = ?", (user_id,))
-            await db.commit()
+            # Update hunt stats using MongoDB
+            await db.users.update_one(
+                {"user_id": user_id},
+                {"$inc": {
+                    "hunt_total": 1,
+                    "hunt_taels_earned": final_reward,
+                    "hunt_damage_max": self.last_damage,
+                    "hunt_elite_kills": 1 if self.rarity["name"] in ("Elite","Master","Grandmaster","Mythical") else 0
+                },
+                "$min": {"hunt_fastest_turns": self.turn}},
+                upsert=True
+            )
 
-            # Item drop
             drop_item = None
             if random.random() < self.rarity["drop_chance"]:
                 possible_items = list(SHOP_ITEMS.keys())
@@ -269,7 +272,6 @@ class CombatView(discord.ui.View):
             embed = discord.Embed(title="🏆 VICTORY", color=format_embed_color("win"), description=desc)
 
         await self.safe_edit(interaction, embed, None)
-        # Remove from active combats
         if hasattr(self.bot, 'active_combats') and user_id in self.bot.active_combats:
             del self.bot.active_combats[user_id]
         self.stop()
@@ -347,15 +349,12 @@ class CombatView(discord.ui.View):
                 child.disabled = True
             db = self.bot.db
             user_id = self.player[0]
-            # Restore HP/Vit
             original = self.pre_hunt_stats[user_id]
             await update_user_stat(db, user_id, "hp", original["hp"])
             await update_user_stat(db, user_id, "vitality", original["vitality"])
-            # Penalty: lose 10% Taels + 2 min cooldown
             tael_loss = max(1, int(self.player[8] * 0.10))
             new_taels = max(0, self.player[8] - tael_loss)
             await update_user_stat(db, user_id, "taels", new_taels)
-            # Store cooldown in bot's memory
             if not hasattr(self.bot, 'hunt_cooldowns'):
                 self.bot.hunt_cooldowns = {}
             self.bot.hunt_cooldowns[user_id] = datetime.datetime.now() + datetime.timedelta(minutes=2)
@@ -374,37 +373,7 @@ class Combat(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.bot.hunt_cooldowns = {}
-        self.bot.loop.create_task(self.init_db_columns())
         print("[DEBUG] Combat cog initialized")
-
-    async def init_db_columns(self):
-        await self.bot.wait_until_ready()
-        db = self.bot.db
-        columns = {
-            "hunt_total": "INTEGER DEFAULT 0",
-            "hunt_damage_max": "INTEGER DEFAULT 0",
-            "hunt_fastest_turns": "INTEGER DEFAULT 999",
-            "hunt_elite_kills": "INTEGER DEFAULT 0",
-            "hunt_taels_earned": "INTEGER DEFAULT 0",
-            "daily_hunts": "INTEGER DEFAULT 0",
-            "last_hunt_date": "TEXT"
-        }
-        async with db.execute("PRAGMA table_info(users)") as cur:
-            existing = [row[1] for row in await cur.fetchall()]
-        for col, dtype in columns.items():
-            if col not in existing:
-                await db.execute(f"ALTER TABLE users ADD COLUMN {col} {dtype}")
-        # Create inventory table if not exists (already in main.py, but safe)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS inventory (
-                user_id INTEGER,
-                item_name TEXT,
-                quantity INTEGER DEFAULT 1,
-                bound INTEGER DEFAULT 0,
-                PRIMARY KEY (user_id, item_name)
-            )
-        """)
-        await db.commit()
 
     async def _is_feature_enabled(self, ctx):
         enabled = await get_bot_setting(self.bot.db, "toggle_combat", True)
@@ -437,27 +406,22 @@ class Combat(commands.Cog):
             else:
                 del self.bot.hunt_cooldowns[user_id]
 
-        # Check if already in combat
         if not hasattr(self.bot, 'active_combats'):
             self.bot.active_combats = {}
         if user_id in self.bot.active_combats:
             return await ctx.send("❌ You are already in combat! Finish your current fight first.", ephemeral=True)
 
-        # Fetch player data
-        async with db.execute("""
-            SELECT user_id, hp, vitality, ki, mastery, active_tech, rank, combat_mastery, taels, meridian_damage
-            FROM users WHERE user_id=?
-        """, (user_id,)) as cursor:
-            user = await cursor.fetchone()
+        # Fetch player data using MongoDB
+        user = await db.users.find_one({"user_id": user_id})
         if not user:
             return await ctx.send(config.MSG_NOT_REGISTERED, ephemeral=True)
 
         # Check meridian damage
-        damaged, _ = has_meridian_damage(user[9])
+        damaged, _ = has_meridian_damage(user.get("meridian_damage"))
         if damaged:
             return await ctx.send("❌ Your meridians are damaged. You cannot hunt.", ephemeral=True)
 
-        rank = user[6]
+        rank = user.get("rank", "The Bound (Mortal)")
         if "Peak Master" in rank:
             base_tier = "Peak Master"
         elif "First-Rate" in rank:
@@ -490,32 +454,43 @@ class Combat(commands.Cog):
 
         # Daily hunt tracking
         today = datetime.datetime.now().date().isoformat()
-        async with db.execute("SELECT daily_hunts, last_hunt_date FROM users WHERE user_id=?", (user_id,)) as cursor:
-            row = await cursor.fetchone()
-        daily_hunts = row[0] if row and row[0] else 0
-        last_date = row[1] if row and row[1] else ""
+        daily_hunts = user.get("daily_hunts", 0)
+        last_date = user.get("last_hunt_date", "")
         if last_date != today:
             daily_hunts = 0
-            await db.execute("UPDATE users SET daily_hunts=0, last_hunt_date=? WHERE user_id=?", (today, user_id))
         daily_hunts += 1
-        await db.execute("UPDATE users SET daily_hunts=? WHERE user_id=?", (daily_hunts, user_id))
-        await db.commit()
+        await db.users.update_one(
+            {"user_id": user_id},
+            {"$set": {"daily_hunts": daily_hunts, "last_hunt_date": today}}
+        )
 
-        # Save pre-hunt HP and Vitality (to restore later)
+        # Save pre-hunt HP and Vitality
         pre_hunt_stats = {
             user_id: {
-                "hp": user[1],
-                "vitality": user[2],
+                "hp": user.get("hp", 100),
+                "vitality": user.get("vitality", 100),
             }
         }
 
-        # Mark user as in combat
         self.bot.active_combats[user_id] = True
 
-        view = CombatView(self.bot, user_id, user, enemy, rarity_data, color, pre_hunt_stats)
+        # Convert user data to tuple format expected by CombatView
+        player_tuple = (
+            user_id,
+            user.get("hp", 100),
+            user.get("vitality", 100),
+            user.get("ki", 0),
+            user.get("mastery", 0.0),
+            user.get("active_tech", "None"),
+            rank,
+            user.get("combat_mastery", 0),
+            user.get("taels", 0)
+        )
+
+        view = CombatView(self.bot, user_id, player_tuple, enemy, rarity_data, color, pre_hunt_stats)
         view.daily_hunts_today = daily_hunts - 1
         embed = discord.Embed(title=f"⚔️ Encounter: {name}", description=f"Rarity: **{chosen_rarity}**", color=color)
-        embed.add_field(name=f"👤 You (HP: {user[1]})", value=f"`{view.generate_bar(user[1], user[1])}`", inline=False)
+        embed.add_field(name=f"👤 You (HP: {user.get('hp', 100)})", value=f"`{view.generate_bar(user.get('hp', 100), user.get('hp', 100))}`", inline=False)
         embed.add_field(name=f"👹 {name} (HP: {enemy_hp})", value=f"`{view.generate_bar(enemy_hp, enemy_hp)}`", inline=False)
         await ctx.send(embed=embed, view=view)
 

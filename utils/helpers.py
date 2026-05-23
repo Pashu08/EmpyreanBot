@@ -5,13 +5,12 @@ All cogs should import from here instead of duplicating code.
 
 import datetime
 import random
-import asyncio
-from utils.constants import RANK_STATS, BREAKTHROUGH_KI, MURIM_EVENTS, FACTIONS, HEARTBEAT_REGEN
+from utils.constants import RANK_STATS, BREAKTHROUGH_KI, MURIM_EVENTS, FACTIONS, HEARTBEAT_REGEN, BACKGROUNDS
 
 print("[DEBUG] helpers.py: Loading helper functions...")
 
 # ==========================================
-# EXISTING FUNCTIONS (cleaned up)
+# EXISTING FUNCTIONS
 # ==========================================
 
 def get_rank_index(rank_name: str) -> int:
@@ -48,10 +47,7 @@ def get_max_stats(rank_name: str) -> dict:
     }
 
 def get_heartbeat_regen(rank_name: str) -> int:
-    """
-    Get heartbeat regeneration amount for a rank.
-    ADDED: New helper function for consistency.
-    """
+    """Get heartbeat regeneration amount for a rank."""
     return HEARTBEAT_REGEN.get(rank_name, 25)
 
 def get_breakthrough_ki_required(current_rank: str, background: str = None) -> int:
@@ -89,9 +85,8 @@ def calculate_afk_gains(rank: str, hours_passed: float, profession: str = None, 
     ki_rate = AFK_KI_PER_HOUR.get(rank, 150)
     ki_gained = int(ki_rate * hours_passed)
 
-    # Hermit background bonus for AFK gains
     if background == "Hermit":
-        ki_gained = int(ki_gained * 1.15)  # 15% bonus
+        ki_gained = int(ki_gained * 1.15)
 
     mastery_multiplier = 1.15 if profession == "Instructor" else 1.0
     mastery_gained = AFK_MASTERY_PER_HOUR * hours_passed * mastery_multiplier
@@ -132,64 +127,7 @@ def has_meridian_damage(meridian_damage_str) -> tuple:
     return (False, 0)
 
 # ==========================================
-# DATABASE HELPER (ADDED - prevents locks)
-# ==========================================
-
-async def safe_db_execute(db, query: str, params: tuple = None, retries: int = 3) -> bool:
-    """
-    Execute database query with automatic retry on lock.
-    ADDED: Prevents "database is locked" errors.
-    """
-    for attempt in range(retries):
-        try:
-            if params:
-                await db.execute(query, params)
-            else:
-                await db.execute(query)
-            return True
-        except Exception as e:
-            if "database is locked" in str(e) and attempt < retries - 1:
-                await asyncio.sleep(0.5 * (attempt + 1))  # Exponential backoff
-                continue
-            raise e
-    return False
-
-async def safe_db_fetchone(db, query: str, params: tuple = None, retries: int = 3):
-    """Fetch one row with automatic retry on lock."""
-    for attempt in range(retries):
-        try:
-            if params:
-                async with db.execute(query, params) as cursor:
-                    return await cursor.fetchone()
-            else:
-                async with db.execute(query) as cursor:
-                    return await cursor.fetchone()
-        except Exception as e:
-            if "database is locked" in str(e) and attempt < retries - 1:
-                await asyncio.sleep(0.5 * (attempt + 1))
-                continue
-            raise e
-    return None
-
-async def safe_db_fetchall(db, query: str, params: tuple = None, retries: int = 3):
-    """Fetch all rows with automatic retry on lock."""
-    for attempt in range(retries):
-        try:
-            if params:
-                async with db.execute(query, params) as cursor:
-                    return await cursor.fetchall()
-            else:
-                async with db.execute(query) as cursor:
-                    return await cursor.fetchall()
-        except Exception as e:
-            if "database is locked" in str(e) and attempt < retries - 1:
-                await asyncio.sleep(0.5 * (attempt + 1))
-                continue
-            raise e
-    return []
-
-# ==========================================
-# FACTION HELPERS (improved)
+# FACTION HELPERS
 # ==========================================
 
 def get_faction_starting_reputation(faction_name: str) -> int:
@@ -201,8 +139,7 @@ def get_faction_reward(faction_name: str, reputation: int) -> str | None:
     """Get reward string for a faction at given reputation level."""
     faction_info = FACTIONS.get(faction_name, {})
     rewards = faction_info.get("rewards", {})
-    
-    # Find highest reward tier achieved
+
     achieved_tiers = [tier for tier in rewards.keys() if reputation >= tier]
     if achieved_tiers:
         highest_tier = max(achieved_tiers)
@@ -210,22 +147,18 @@ def get_faction_reward(faction_name: str, reputation: int) -> str | None:
     return None
 
 # ==========================================
-# RANDOM EVENT HELPERS (improved)
+# RANDOM EVENT HELPERS
 # ==========================================
 
-def roll_random_event(return_effects_only: bool = False):
+def roll_random_event():
     """Return a random Murim event from constants.MURIM_EVENTS."""
     event = random.choice(MURIM_EVENTS)
-    description, effects = event
-    return description, effects
+    return event[0], event[1]  # description, effects
 
 def apply_event_effects(user_data: dict, effects: dict) -> dict:
-    """
-    Apply event effects to user data.
-    ADDED: Helper to apply event modifications.
-    """
+    """Apply event effects to user data."""
     result = user_data.copy()
-    
+
     for key, value in effects.items():
         if key == "ki":
             result["ki"] = max(0, result.get("ki", 0) + value)
@@ -239,17 +172,17 @@ def apply_event_effects(user_data: dict, effects: dict) -> dict:
             result["mastery"] = max(0, result.get("mastery", 0) + value)
         elif key == "combat_mastery":
             result["combat_mastery"] = max(0, result.get("combat_mastery", 0) + value)
-    
+
     return result
 
 # ==========================================
-# EMBED COLOR HELPER (cleaned)
+# EMBED COLOR HELPER
 # ==========================================
 
 def format_embed_color(color_name: str) -> int:
     """Convert a color name to a Discord hex value."""
     from utils.constants import COLOR_MAIN, COLOR_WIN, COLOR_LOSE, COLOR_GOLD, COLOR_TEAL
-    
+
     colors = {
         "main": COLOR_MAIN,
         "win": COLOR_WIN,
@@ -262,7 +195,7 @@ def format_embed_color(color_name: str) -> int:
     return colors.get(color_name.lower(), COLOR_MAIN)
 
 # ==========================================
-# TIME HELPER (ADDED)
+# TIME HELPER
 # ==========================================
 
 def get_timezone_aware_now():
@@ -273,11 +206,11 @@ def format_time_remaining(seconds: int) -> str:
     """Format seconds into human-readable time remaining string."""
     if seconds <= 0:
         return "now"
-    
+
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
     secs = seconds % 60
-    
+
     if hours > 0:
         return f"{hours}h {minutes}m"
     elif minutes > 0:
@@ -286,7 +219,7 @@ def format_time_remaining(seconds: int) -> str:
         return f"{secs}s"
 
 # ==========================================
-# VALIDATION HELPERS (ADDED)
+# VALIDATION HELPERS
 # ==========================================
 
 def is_valid_rank(rank_name: str) -> bool:
@@ -295,7 +228,6 @@ def is_valid_rank(rank_name: str) -> bool:
 
 def is_valid_background(background_name: str) -> bool:
     """Check if a background name is valid."""
-    from utils.constants import BACKGROUNDS
     return background_name in BACKGROUNDS
 
 def clamp(value: int, min_value: int, max_value: int) -> int:

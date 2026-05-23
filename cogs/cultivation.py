@@ -46,7 +46,6 @@ MAJOR_FAILURE_PENALTY = {"ki_percent": 30, "taels": 100, "meridian_minutes": 15}
 MINOR_COOLDOWN_MINUTES = 10
 MAJOR_COOLDOWN_MINUTES = 30
 
-
 class BreakthroughView(discord.ui.View):
     def __init__(self, bot, user_id, user_rank, user_bg):
         super().__init__(timeout=60)
@@ -129,14 +128,19 @@ class BreakthroughView(discord.ui.View):
 
         new_rank_id = RANKS.index(new_rank) if new_rank in RANKS else 0
 
-        await db.execute("""
-            UPDATE users SET
-                rank = ?, rank_id = ?, minor_realm = 'Initial',
-                item_id = ?, ki = 0,
-                hp = ?, vitality = ?
-            WHERE user_id = ?
-        """, (new_rank, new_rank_id, new_item, new_hp_cap, new_vit_cap, self.user_id))
-        await db.commit()
+        # Update user using MongoDB
+        await db.users.update_one(
+            {"user_id": self.user_id},
+            {"$set": {
+                "rank": new_rank,
+                "rank_id": new_rank_id,
+                "minor_realm": "Initial",
+                "item_id": new_item,
+                "ki": 0,
+                "hp": new_hp_cap,
+                "vitality": new_vit_cap
+            }}
+        )
 
         result_embed = discord.Embed(
             title="🎊 REALM ASCENSION SUCCESS",
@@ -169,11 +173,11 @@ class BreakthroughView(discord.ui.View):
 
         cooldown_key = f"breakthrough_major_{self.user_id}"
         now = datetime.datetime.now().isoformat()
-        await db.execute(
-            "INSERT OR REPLACE INTO user_cooldowns (cooldown_key, last_used) VALUES (?, ?)",
-            (cooldown_key, now)
+        await db.user_cooldowns.update_one(
+            {"cooldown_key": cooldown_key},
+            {"$set": {"last_used": now}},
+            upsert=True
         )
-        await db.commit()
 
         result_embed = discord.Embed(
             title="💀 BREAKTHROUGH FAILED",
@@ -188,7 +192,6 @@ class BreakthroughView(discord.ui.View):
         )
         await interaction.response.edit_message(embed=result_embed, view=None)
         self.stop()
-
 
 class Cultivation(commands.Cog):
     def __init__(self, bot):
@@ -273,16 +276,17 @@ class Cultivation(commands.Cog):
         user_id = ctx.author.id
         db = self.bot.db
 
-        async with db.execute(
-            "SELECT ki, rank, background, minor_realm, mastery, taels FROM users WHERE user_id = ?",
-            (user_id,)
-        ) as cursor:
-            user = await cursor.fetchone()
-
+        # Fetch user data using MongoDB
+        user = await db.users.find_one({"user_id": user_id})
         if not user:
             return await ctx.send(config.MSG_NOT_REGISTERED, ephemeral=True)
 
-        ki, rank, bg, minor_realm, mastery, taels = user
+        ki = user.get("ki", 0)
+        rank = user.get("rank", "The Bound (Mortal)")
+        bg = user.get("background", "")
+        minor_realm = user.get("minor_realm", "Initial")
+        mastery = user.get("mastery", 0.0)
+        taels = user.get("taels", 0)
 
         if not minor_realm or minor_realm == "None":
             minor_realm = "Initial"
@@ -324,7 +328,6 @@ class Cultivation(commands.Cog):
         pill_bonus = 15 if has_pill else 0
         final_chance = min(base_chance + pill_bonus, 95)
 
-        # Calculate pill message BEFORE the embed (fixes syntax highlighting)
         if has_pill:
             pill_message = "💊 Breakthrough Pill: +15% (you have one)"
         else:
@@ -420,7 +423,6 @@ class Cultivation(commands.Cog):
         pill_bonus = 15 if has_pill else 0
         final_chance = min(base_chance + pill_bonus, 95)
 
-        # Calculate pill message BEFORE the embed (fixes syntax highlighting)
         if has_pill:
             pill_message = "💊 Breakthrough Pill: +15% (you have one)"
         else:
@@ -472,16 +474,18 @@ class Cultivation(commands.Cog):
         user_id = ctx.author.id
         db = self.bot.db
 
-        async with db.execute(
-            "SELECT rank, minor_realm, ki, mastery, minor_breakthrough_bonus_ki, minor_breakthrough_bonus_damage, minor_breakthrough_bonus_bt FROM users WHERE user_id = ?",
-            (user_id,)
-        ) as cursor:
-            user = await cursor.fetchone()
-
+        # Fetch user data using MongoDB
+        user = await db.users.find_one({"user_id": user_id})
         if not user:
             return await ctx.send(config.MSG_NOT_REGISTERED, ephemeral=True)
 
-        rank, minor_realm, ki, mastery, bonus_ki, bonus_damage, bonus_bt = user
+        rank = user.get("rank", "The Bound (Mortal)")
+        minor_realm = user.get("minor_realm", "Initial")
+        ki = user.get("ki", 0)
+        mastery = user.get("mastery", 0.0)
+        bonus_ki = user.get("minor_breakthrough_bonus_ki", 0)
+        bonus_damage = user.get("minor_breakthrough_bonus_damage", 0)
+        bonus_bt = user.get("minor_breakthrough_bonus_bt", 0)
 
         if not minor_realm or minor_realm == "None":
             minor_realm = "Initial"
@@ -531,7 +535,6 @@ class Cultivation(commands.Cog):
         )
 
         await ctx.send(embed=embed)
-
 
 async def setup(bot):
     await bot.add_cog(Cultivation(bot))

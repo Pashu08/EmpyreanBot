@@ -8,36 +8,23 @@ PERMANENT_GOD = 756012403291848804
 temporary_gods = set() 
 
 # ==========================================
-# HELPER: Get setting from database
+# HELPER: Get setting from database (MongoDB version)
 # ==========================================
 async def get_setting(bot, key, default=None):
     try:
-        async with bot.db.execute("SELECT setting_value FROM bot_settings WHERE setting_key = ?", (key,)) as cursor:
-            row = await cursor.fetchone()
-            if row:
-                val = row[0]
-                if val.isdigit():
-                    return int(val)
-                if val.lower() in ('true', 'false'):
-                    return val.lower() == 'true'
-                return val
+        return await bot.db.get_bot_setting(key, default)
     except:
-        pass
-    return default
+        return default
 
 async def set_setting(bot, key, value):
     try:
-        await bot.db.execute(
-            "INSERT OR REPLACE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)",
-            (key, str(value))
-        )
-        await bot.db.commit()
+        await bot.db.set_bot_setting(key, value)
         return True
     except:
         return False
 
 # ==========================================
-# PERMISSION HELPERS
+# PERMISSION HELPERS (MongoDB version)
 # ==========================================
 async def has_permission(bot, user_id, permission):
     if user_id == PERMANENT_GOD:
@@ -45,40 +32,35 @@ async def has_permission(bot, user_id, permission):
     if user_id in temporary_gods:
         return True
     try:
-        async with bot.db.execute("SELECT 1 FROM admin_permissions WHERE user_id = ? AND permission = ?", (user_id, permission)) as cursor:
-            return await cursor.fetchone() is not None
+        perms = await bot.db.get_user_permissions(user_id)
+        return permission in perms
     except:
         return False
 
 async def add_permission(bot, user_id, permission):
     try:
-        await bot.db.execute("INSERT OR IGNORE INTO admin_permissions (user_id, permission) VALUES (?, ?)", (user_id, permission))
-        await bot.db.commit()
+        await bot.db.add_user_permission(user_id, permission)
         return True
     except:
         return False
 
 async def remove_permission(bot, user_id, permission):
     try:
-        await bot.db.execute("DELETE FROM admin_permissions WHERE user_id = ? AND permission = ?", (user_id, permission))
-        await bot.db.commit()
+        await bot.db.remove_user_permission(user_id, permission)
         return True
     except:
         return False
 
 async def get_user_permissions(bot, user_id):
     try:
-        async with bot.db.execute("SELECT permission FROM admin_permissions WHERE user_id = ?", (user_id,)) as cursor:
-            rows = await cursor.fetchall()
-            return [row[0] for row in rows]
+        return await bot.db.get_user_permissions(user_id)
     except:
         return []
 
 # ==========================================
-# ADMIN LOGGING HELPER
+# ADMIN LOGGING HELPER (unchanged)
 # ==========================================
 async def log_admin_command(bot, ctx, command_name, details=""):
-    """Send admin command usage to configured log channel."""
     if not config.ADMIN_LOG_CHANNEL_ID:
         return
     
@@ -328,8 +310,7 @@ class Admin(commands.Cog):
         target = member or ctx.author
         await log_admin_command(self.bot, ctx, "!reset", f"Target: {target.id}")
         print(f"[DEBUG] !reset {target.id} by {ctx.author.id}")
-        await self.bot.db.execute("DELETE FROM users WHERE user_id = ?", (target.id,))
-        await self.bot.db.commit()
+        await self.bot.db.users.delete_one({"user_id": target.id})
         await ctx.send(f"♻️ **Divine Reset:** {target.name} erased from history.", delete_after=2)
 
     @commands.command()
@@ -341,8 +322,11 @@ class Admin(commands.Cog):
         target = member or ctx.author
         await log_admin_command(self.bot, ctx, "!setki", f"Target: {target.id}, Amount: {amount}")
         print(f"[DEBUG] !setki {amount} for {target.id} by {ctx.author.id}")
-        await self.bot.db.execute("UPDATE users SET ki = ? WHERE user_id = ?", (amount, target.id))
-        await self.bot.db.commit()
+        await self.bot.db.users.update_one(
+            {"user_id": target.id},
+            {"$set": {"ki": amount}},
+            upsert=True
+        )
         await ctx.send(f"✨ Ki set to {amount} for {target.name}.", delete_after=2)
 
     @commands.command()
@@ -354,8 +338,11 @@ class Admin(commands.Cog):
         target = member or ctx.author
         await log_admin_command(self.bot, ctx, "!settaels", f"Target: {target.id}, Amount: {amount}")
         print(f"[DEBUG] !settaels {amount} for {target.id} by {ctx.author.id}")
-        await self.bot.db.execute("UPDATE users SET taels = ? WHERE user_id = ?", (amount, target.id))
-        await self.bot.db.commit()
+        await self.bot.db.users.update_one(
+            {"user_id": target.id},
+            {"$set": {"taels": amount}},
+            upsert=True
+        )
         await ctx.send(f"💰 Taels set to {amount} for {target.name}.", delete_after=2)
 
     @commands.command()
@@ -367,8 +354,11 @@ class Admin(commands.Cog):
         target = member or ctx.author
         await log_admin_command(self.bot, ctx, "!setmastery", f"Target: {target.id}, Amount: {amount}")
         print(f"[DEBUG] !setmastery {amount} for {target.id} by {ctx.author.id}")
-        await self.bot.db.execute("UPDATE users SET mastery = ? WHERE user_id = ?", (amount, target.id))
-        await self.bot.db.commit()
+        await self.bot.db.users.update_one(
+            {"user_id": target.id},
+            {"$set": {"mastery": amount}},
+            upsert=True
+        )
         await ctx.send(f"📖 Mastery set to {amount}% for {target.name}.", delete_after=2)
 
     @commands.command()
@@ -380,8 +370,11 @@ class Admin(commands.Cog):
         target = member or ctx.author
         await log_admin_command(self.bot, ctx, "!setcombat", f"Target: {target.id}, Amount: {amount}")
         print(f"[DEBUG] !setcombat {amount} for {target.id} by {ctx.author.id}")
-        await self.bot.db.execute("UPDATE users SET combat_mastery = ? WHERE user_id = ?", (amount, target.id))
-        await self.bot.db.commit()
+        await self.bot.db.users.update_one(
+            {"user_id": target.id},
+            {"$set": {"combat_mastery": amount}},
+            upsert=True
+        )
         await ctx.send(f"⚔️ Combat Mastery set to {amount} for {target.name}.", delete_after=2)
 
     @commands.command()
@@ -393,8 +386,11 @@ class Admin(commands.Cog):
         target = member or ctx.author
         await log_admin_command(self.bot, ctx, "!fixmeridians", f"Target: {target.id}")
         print(f"[DEBUG] !fixmeridians {target.id} by {ctx.author.id}")
-        await self.bot.db.execute("UPDATE users SET meridian_damage = NULL WHERE user_id = ?", (target.id,))
-        await self.bot.db.commit()
+        await self.bot.db.users.update_one(
+            {"user_id": target.id},
+            {"$set": {"meridian_damage": None}},
+            upsert=True
+        )
         await ctx.send(f"✨ **Heavenly Mend:** {target.name}'s meridians have been restored.", delete_after=2)
 
     @commands.command()
@@ -407,18 +403,19 @@ class Admin(commands.Cog):
         await log_admin_command(self.bot, ctx, "!refill", f"Target: {target.id}")
         print(f"[DEBUG] !refill {target.id} by {ctx.author.id}")
 
-        async with self.bot.db.execute("SELECT rank FROM users WHERE user_id = ?", (target.id,)) as cursor:
-            user = await cursor.fetchone()
+        user = await self.bot.db.users.find_one({"user_id": target.id})
         if not user:
             await ctx.send(f"❌ {target.name} is not registered.", delete_after=2)
             return
 
-        rank = user[0]
+        rank = user.get("rank", "The Bound (Mortal)")
         caps = {"The Bound (Mortal)": 100, "Third-Rate Warrior": 300, "Second-Rate Warrior": 600}
         max_v = caps.get(rank, 1000)
 
-        await self.bot.db.execute("UPDATE users SET vitality = ?, hp = ? WHERE user_id = ?", (max_v, max_v, target.id))
-        await self.bot.db.commit()
+        await self.bot.db.users.update_one(
+            {"user_id": target.id},
+            {"$set": {"vitality": max_v, "hp": max_v}}
+        )
         await ctx.send(f"🍷 **Divine Favor:** {target.name} restored to {max_v} Vitality.", delete_after=2)
 
     # ==========================================
@@ -432,17 +429,19 @@ class Admin(commands.Cog):
         await ctx.message.delete()
         await log_admin_command(self.bot, ctx, "!ban", f"Target: {member.id}, Reason: {reason}")
 
-        async with self.bot.db.execute("SELECT 1 FROM banned_users WHERE user_id = ?", (member.id,)) as cursor:
-            if await cursor.fetchone():
-                await ctx.send(f"❌ {member.mention} is already banned.", delete_after=2)
-                return
+        # Check if already banned
+        existing = await self.bot.db.banned_users.find_one({"user_id": member.id})
+        if existing:
+            await ctx.send(f"❌ {member.mention} is already banned.", delete_after=2)
+            return
 
         now = datetime.datetime.now().isoformat()
-        await self.bot.db.execute(
-            "INSERT INTO banned_users (user_id, reason, banned_at, banned_by) VALUES (?, ?, ?, ?)",
-            (member.id, reason, now, ctx.author.id)
-        )
-        await self.bot.db.commit()
+        await self.bot.db.banned_users.insert_one({
+            "user_id": member.id,
+            "reason": reason,
+            "banned_at": now,
+            "banned_by": ctx.author.id
+        })
 
         print(f"[DEBUG] !ban {member.id} by {ctx.author.id}, reason: {reason}")
         await ctx.send(f"🔨 **Banned** {member.mention}\nReason: {reason}", delete_after=2)
@@ -455,13 +454,10 @@ class Admin(commands.Cog):
         await ctx.message.delete()
         await log_admin_command(self.bot, ctx, "!unban", f"Target: {member.id}")
 
-        async with self.bot.db.execute("SELECT 1 FROM banned_users WHERE user_id = ?", (member.id,)) as cursor:
-            if not await cursor.fetchone():
-                await ctx.send(f"❌ {member.mention} is not banned.", delete_after=2)
-                return
-
-        await self.bot.db.execute("DELETE FROM banned_users WHERE user_id = ?", (member.id,))
-        await self.bot.db.commit()
+        result = await self.bot.db.banned_users.delete_one({"user_id": member.id})
+        if result.deleted_count == 0:
+            await ctx.send(f"❌ {member.mention} is not banned.", delete_after=2)
+            return
 
         print(f"[DEBUG] !unban {member.id} by {ctx.author.id}")
         await ctx.send(f"✅ **Unbanned** {member.mention}", delete_after=2)
@@ -579,17 +575,19 @@ class Admin(commands.Cog):
         emojis = {}
         messages = {}
 
-        async with self.bot.db.execute("SELECT setting_key, setting_value FROM bot_settings") as cursor:
-            rows = await cursor.fetchall()
-            for key, value in rows:
-                if key.startswith("toggle_"):
-                    toggles[key[7:]] = value
-                elif key.startswith("cooldown_"):
-                    cooldowns[key[9:]] = value
-                elif key.startswith("emoji_"):
-                    emojis[key[6:]] = value
-                elif key.startswith("msg_"):
-                    messages[key[4:]] = value
+        # Fetch all settings from bot_settings collection
+        cursor = self.bot.db.bot_settings.find({})
+        async for doc in cursor:
+            key = doc.get("setting_key")
+            value = doc.get("setting_value")
+            if key.startswith("toggle_"):
+                toggles[key[7:]] = value
+            elif key.startswith("cooldown_"):
+                cooldowns[key[9:]] = value
+            elif key.startswith("emoji_"):
+                emojis[key[6:]] = value
+            elif key.startswith("msg_"):
+                messages[key[4:]] = value
 
         embed = discord.Embed(title="⚙️ Current Bot Settings", color=0x00AAFF)
 

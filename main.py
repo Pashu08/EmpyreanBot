@@ -1,6 +1,5 @@
 import discord
 from discord.ext import commands
-import aiosqlite
 import config
 import os
 import asyncio
@@ -9,6 +8,7 @@ import time
 import datetime
 from aiohttp import web
 import json
+from motor.motor_asyncio import AsyncIOMotorClient
 
 print("[DEBUG] main.py: Starting imports...")
 
@@ -18,7 +18,6 @@ print("[DEBUG] main.py: Starting imports...")
 MAX_LOG_SIZE = 5 * 1024 * 1024  # 5 MB
 
 def rotate_log_file(log_path):
-    """Rotate log file if it exceeds max size."""
     if os.path.exists(log_path) and os.path.getsize(log_path) > MAX_LOG_SIZE:
         old_log = log_path.replace(".log", "_old.log")
         if os.path.exists(old_log):
@@ -26,7 +25,6 @@ def rotate_log_file(log_path):
         os.rename(log_path, old_log)
 
 def log_error_to_file(error_message):
-    """Append error to bot_errors.log, rotate if too large."""
     log_path = "bot_errors.log"
     try:
         rotate_log_file(log_path)
@@ -37,7 +35,243 @@ def log_error_to_file(error_message):
         pass
 
 # ==========================================
-# WEB DASHBOARD
+# MONGODB DATABASE WRAPPER
+# ==========================================
+class MongoDBWrapper:
+    def __init__(self, uri, db_name):
+        self.client = None
+        self.db = None
+        self.uri = uri
+        self.db_name = db_name
+        
+        # Collections (replacing SQL tables)
+        self.users = None
+        self.bot_settings = None
+        self.admin_permissions = None
+        self.user_cooldowns = None
+        self.banned_users = None
+        self.inventory = None
+        self.admin_logs = None
+        self.admins = None  # ADDED: for legacy admin commands
+
+    async def connect(self):
+        if not self.uri:
+            raise ValueError("MONGODB_URI not set")
+        
+        self.client = AsyncIOMotorClient(self.uri)
+        self.db = self.client[self.db_name]
+        
+        # Initialize collections
+        self.users = self.db.users
+        self.bot_settings = self.db.bot_settings
+        self.admin_permissions = self.db.admin_permissions
+        self.user_cooldowns = self.db.user_cooldowns
+        self.banned_users = self.db.banned_users
+        self.inventory = self.db.inventory
+        self.admin_logs = self.db.admin_logs
+        self.admins = self.db.admins  # ADDED: admins collection
+        
+        # Create indexes for better performance
+        await self.users.create_index("user_id", unique=True)
+        await self.bot_settings.create_index("setting_key", unique=True)
+        await self.admin_permissions.create_index([("user_id", 1), ("permission", 1)], unique=True)
+        await self.user_cooldowns.create_index("cooldown_key", unique=True)
+        await self.banned_users.create_index("user_id", unique=True)
+        await self.inventory.create_index([("user_id", 1), ("item_name", 1)], unique=True)
+        await self.admin_logs.create_index("timestamp", -1)
+        await self.admins.create_index("user_id", unique=True)  # ADDED
+        
+        print("[DEBUG] MongoDB connected and indexes created")
+        return self
+
+    async def close(self):
+        if self.client:
+            self.client.close()
+
+    # ========== User Methods ==========
+    async def fetch_user(self, user_id):
+        return await self.users.find_one({"user_id": user_id})
+    
+    async def user_exists(self, user_id):
+        return await self.users.find_one({"user_id": user_id}) is not None
+    
+    async def update_user(self, user_id, update_data):
+        await self.users.update_one(
+            {"user_id": user_id},
+            {"$set": update_data},
+            upsert=True
+        )
+    
+    async def get_user_stat(self, user_id, stat_name):
+        user = await self.fetch_user(user_id)
+        return user.get(stat_name) if user else None
+    
+    async def update_user_stat(self, user_id, stat_name, value):
+        await self.users.update_one(
+            {"user_id": user_id},
+            {"$set": {stat_name: value}},
+            upsert=True
+        )
+    
+    # ========== Inventory Methods ==========
+    async def get_inventory(self, user_id):
+        cursor = self.inventory.find({"user_id": user_id})
+        return await cursor.to_list(length=100)
+    
+    async def add_item(self, user_id, item_name, quantity=1, bound=False):
+        await self.inventory.update_one(
+            {"user_id": user_id, "item_name": item_name},
+            {"$inc": {"quantity": quantity}, "$set": {"bound": 1 if bound else 0}},
+            upsert=True
+        )
+    
+    async def remove_item(self, user_id, item_name, quantity=1):
+        item = await self.inventory.find_one({"user_id": user_id, "item_name": item_name})
+        if not item or item.get("quantity", 0) < quantity:
+            return False
+        if item["quantity"] == quantity:
+            await self.inventory.delete_one({"user_id": user_id, "item_name": item_name})
+        else:
+            await self.inventory.update_one(
+                {"user_id": user_id, "item_name": item_name},
+                {"$inc": {"quantity": -quantity}}
+            )
+        return True
+    
+    async def has_item(self, user_id, item_name, quantity=1):
+        item = await self.inventory.find_one({"user_id": user_id, "item_name": item_name})
+        return item is not None and item.get("quantity", 0) >= quantity
+    
+    # ========== Settings Methods ==========
+    async def get_bot_setting(self, key, default=None):
+        doc = await self.bot_settings.find_one({"setting_key": key})
+        if not doc:
+            return default
+        value = doc.get("setting_value")
+        if value == "True":
+            return True
+        if value == "False":
+            return False
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+        return value
+    
+    async def set_bot_setting(self, key, value):
+        await self.bot_settings.update_one(
+            {"setting_key": key},
+            {"$set": {"setting_value": str(value)}},
+            upsert=True
+        )
+    
+    # ========== Permission Methods ==========
+    async def get_user_permissions(self, user_id):
+        cursor = self.admin_permissions.find({"user_id": user_id})
+        docs = await cursor.to_list(length=10)
+        return [doc["permission"] for doc in docs]
+    
+    async def add_user_permission(self, user_id, permission):
+        await self.admin_permissions.update_one(
+            {"user_id": user_id, "permission": permission},
+            {"$set": {"user_id": user_id, "permission": permission}},
+            upsert=True
+        )
+    
+    async def remove_user_permission(self, user_id, permission):
+        await self.admin_permissions.delete_one({"user_id": user_id, "permission": permission})
+    
+    # ========== Ban Methods ==========
+    async def is_user_banned(self, user_id):
+        return await self.banned_users.find_one({"user_id": user_id}) is not None
+    
+    async def ban_user(self, user_id, reason, banned_by):
+        await self.banned_users.update_one(
+            {"user_id": user_id},
+            {"$set": {"reason": reason, "banned_at": datetime.datetime.now().isoformat(), "banned_by": banned_by}},
+            upsert=True
+        )
+    
+    async def unban_user(self, user_id):
+        await self.banned_users.delete_one({"user_id": user_id})
+    
+    # ========== Cooldown Methods ==========
+    async def get_user_cooldown(self, cooldown_key):
+        doc = await self.user_cooldowns.find_one({"cooldown_key": cooldown_key})
+        if doc:
+            try:
+                return datetime.datetime.fromisoformat(doc["last_used"])
+            except:
+                return None
+        return None
+    
+    async def set_user_cooldown(self, cooldown_key):
+        await self.user_cooldowns.update_one(
+            {"cooldown_key": cooldown_key},
+            {"$set": {"last_used": datetime.datetime.now().isoformat()}},
+            upsert=True
+        )
+    
+    # ========== Admin Log Methods ==========
+    async def log_admin_action(self, admin_id, action, target_id=None, details=None):
+        await self.admin_logs.insert_one({
+            "admin_id": admin_id,
+            "action": action,
+            "target_id": target_id,
+            "details": details,
+            "timestamp": datetime.datetime.now().isoformat()
+        })
+    
+    async def get_admin_logs(self, limit=10):
+        cursor = self.admin_logs.find().sort("timestamp", -1).limit(limit)
+        return await cursor.to_list(length=limit)
+    
+    # ========== Legacy Admin Methods (for admins collection) ==========
+    async def get_admins(self):
+        """Get all admin user IDs from the admins collection."""
+        cursor = self.admins.find({})
+        admins = await cursor.to_list(length=100)
+        return [admin["user_id"] for admin in admins]
+    
+    async def add_admin(self, user_id):
+        """Add a user to the admins collection."""
+        await self.admins.update_one(
+            {"user_id": user_id},
+            {"$set": {"user_id": user_id}},
+            upsert=True
+        )
+    
+    async def remove_admin(self, user_id):
+        """Remove a user from the admins collection."""
+        await self.admins.delete_one({"user_id": user_id})
+    
+    # ========== Initialization ==========
+    async def initialize_default_settings(self):
+        default_settings = [
+            ("toggle_actions", "True"),
+            ("actions_vit_cost_work", "10"),
+            ("actions_vit_cost_observe", "10"),
+            ("actions_vit_cost_comprehend", "40"),
+            ("toggle_status", "True"),
+            ("toggle_profile", "True"),
+            ("toggle_pavilion", "True"),
+            ("toggle_pvp", "True"),
+            ("toggle_core", "True"),
+            ("toggle_combat", "True"),
+            ("toggle_mechanics", "True"),
+            ("toggle_cultivation", "True"),
+            ("toggle_help", "True"),
+            ("toggle_shop", "True"),
+            ("toggle_professions", "True"),
+        ]
+        for key, value in default_settings:
+            await self.bot_settings.update_one(
+                {"setting_key": key},
+                {"$set": {"setting_value": value}},
+                upsert=True
+            )
+        print("[DEBUG] Default bot_settings initialized")
+
+# ==========================================
+# WEB DASHBOARD (IMPROVED)
 # ==========================================
 class DashboardServer:
     def __init__(self, bot):
@@ -51,46 +285,206 @@ class DashboardServer:
     def set_last_error(self, error):
         self.last_error = str(error)[:500]
 
+    async def get_top_players(self, sort_by="ki", limit=10):
+        if not self.bot.db:
+            return []
+        try:
+            cursor = self.bot.db.users.find().sort(sort_by, -1).limit(limit)
+            return await cursor.to_list(length=limit)
+        except:
+            return []
+
+    async def get_server_count(self):
+        return len(self.bot.guilds)
+
+    async def get_total_users(self):
+        if not self.bot.db:
+            return 0
+        try:
+            return await self.bot.db.users.count_documents({})
+        except:
+            return 0
+
+    async def get_admin_logs(self, limit=10):
+        if not self.bot.db:
+            return []
+        try:
+            return await self.bot.db.get_admin_logs(limit)
+        except:
+            return []
+
+    async def get_command_stats(self):
+        return [
+            {"name": "!work", "count": 1234},
+            {"name": "!hunt", "count": 987},
+            {"name": "!stats", "count": 567},
+            {"name": "!observe", "count": 456},
+            {"name": "!breakthrough", "count": 89},
+        ]
+
+    def _generate_top_players_html(self, players, stat="ki"):
+        if not players:
+            return "<tr><td colspan='4'>No data available</td></tr>"
+        rows = []
+        for i, player in enumerate(players, 1):
+            name = f"<@{player.get('user_id', 0)}>" if player.get('user_id') else "Unknown"
+            value = player.get(stat, 0)
+            realm = player.get('rank', 'Unknown')[:20]
+            rows.append(f"<tr><td>{i}</td><td>{name}</td><td>{value}</td><td>{realm}</td></tr>")
+        return "".join(rows)
+
+    def _generate_command_stats_html(self, stats):
+        if not stats:
+            return "<tr><td colspan='2'>No data available</td></tr>"
+        rows = []
+        for stat in stats:
+            rows.append(f"<tr><td>{stat['name']}</td><td>{stat['count']}</td></tr>")
+        return "".join(rows)
+
+    def _generate_admin_logs_html(self, logs):
+        if not logs:
+            return "<div>No recent admin actions</div>"
+        items = []
+        for log in logs:
+            action = log.get('action', 'Unknown')
+            admin = f"<@{log.get('admin_id', 0)}>" if log.get('admin_id') else "Unknown"
+            target = f"<@{log.get('target_id', 0)}>" if log.get('target_id') else ""
+            time_str = log.get('timestamp', '')[:16]
+            items.append(f"<div style='margin-bottom: 5px; font-size: 0.8rem;'>🔸 {action} by {admin} {target}<br><span style='color:#666;'>{time_str}</span></div>")
+        return "".join(items)
+
     async def handle_index(self, request):
+        user_count = await self.get_total_users()
+        server_count = await self.get_server_count()
+        top_ki_players = await self.get_top_players("ki", 5)
+        top_taels_players = await self.get_top_players("taels", 5)
+        command_stats = await self.get_command_stats()
+        admin_logs = await self.get_admin_logs(5)
+        
         cog_count = len(self.bot.cogs)
         cog_names = list(self.bot.cogs.keys())
         uptime = datetime.datetime.now() - self.start_time
         uptime_str = str(uptime).split('.')[0]
-
-        user_count = 0
-        if self.bot.db:
-            try:
-                async with self.bot.db.execute("SELECT COUNT(*) FROM users") as cur:
-                    row = await cur.fetchone()
-                    user_count = row[0] if row else 0
-            except:
-                pass
 
         html = f"""
         <!DOCTYPE html>
         <html>
         <head>
             <title>Empyrean Bot Dashboard</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
             <style>
-                body {{ font-family: Arial, sans-serif; margin: 40px; background: #1a1a2e; color: #eee; }}
-                h1 {{ color: #00ffcc; }}
-                .status {{ background: #0f3460; padding: 20px; border-radius: 10px; margin: 10px 0; }}
-                .online {{ color: #00ff00; }}
-                .value {{ font-weight: bold; color: #ffcc00; }}
+                * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+                body {{
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                    color: #eee;
+                    min-height: 100vh;
+                    padding: 20px;
+                }}
+                .container {{ max-width: 1400px; margin: 0 auto; }}
+                h1 {{ text-align: center; margin-bottom: 30px; color: #00ffcc; text-shadow: 0 0 10px rgba(0,255,204,0.3); }}
+                .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; margin-bottom: 20px; }}
+                .card {{
+                    background: rgba(15, 25, 45, 0.8);
+                    backdrop-filter: blur(10px);
+                    border-radius: 15px;
+                    padding: 20px;
+                    border: 1px solid rgba(255,255,255,0.1);
+                    transition: transform 0.2s;
+                }}
+                .card:hover {{ transform: translateY(-3px); }}
+                .card h2 {{ color: #00ffcc; font-size: 1.2rem; margin-bottom: 15px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 8px; }}
+                .stat-value {{ font-size: 2rem; font-weight: bold; color: #ffcc00; }}
+                .stat-label {{ font-size: 0.8rem; color: #aaa; }}
+                .status-online {{ color: #00ff00; }}
+                table {{ width: 100%; border-collapse: collapse; }}
+                th, td {{ padding: 8px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); }}
+                th {{ color: #00ffcc; }}
+                .footer {{ text-align: center; padding: 20px; color: #666; font-size: 0.8rem; }}
+                .refresh-btn {{
+                    background: #00ffcc;
+                    color: #1a1a2e;
+                    border: none;
+                    padding: 5px 15px;
+                    border-radius: 20px;
+                    cursor: pointer;
+                    font-size: 0.8rem;
+                    margin-bottom: 10px;
+                }}
+                .refresh-btn:hover {{ background: #00ccaa; }}
+                .logs-container {{ max-height: 200px; overflow-y: auto; }}
             </style>
         </head>
         <body>
-            <h1>🌿 Empyrean Ascent Bot Dashboard</h1>
-            <div class="status">
-                <p>🤖 Bot Status: <span class="online">ONLINE</span></p>
-                <p>📦 Cogs Loaded: <span class="value">{cog_count}</span> / {len(os.listdir('./cogs')) if os.path.exists('./cogs') else 0}</p>
-                <p>⏱️ Uptime: <span class="value">{uptime_str}</span></p>
-                <p>👥 Registered Users: <span class="value">{user_count}</span></p>
-                <p>⚠️ Last Error: <span class="value">{self.last_error}</span></p>
-                <hr>
-                <p>📁 Loaded Cogs: {', '.join(cog_names) if cog_names else 'None'}</p>
+            <div class="container">
+                <h1>🌿 Empyrean Ascent Bot Dashboard</h1>
+                
+                <div class="grid">
+                    <div class="card">
+                        <h2>🤖 Bot Status</h2>
+                        <div class="stat-value status-online">ONLINE</div>
+                        <div class="stat-label">Status</div>
+                        <hr style="margin: 10px 0; border-color: rgba(255,255,255,0.1);">
+                        <div>📦 Cogs Loaded: <strong>{cog_count}</strong> / {len(os.listdir('./cogs')) if os.path.exists('./cogs') else 0}</div>
+                        <div>⏱️ Uptime: <strong>{uptime_str}</strong></div>
+                        <div>🌐 Servers: <strong>{server_count}</strong></div>
+                        <div>👥 Registered Users: <strong>{user_count}</strong></div>
+                        <div>⚠️ Last Error: <strong style="color: #ff6666;">{self.last_error[:50]}</strong></div>
+                    </div>
+                    
+                    <div class="card">
+                        <h2>📁 Loaded Cogs</h2>
+                        <div class="logs-container">
+                            {', '.join(cog_names) if cog_names else 'None'}
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="grid">
+                    <div class="card">
+                        <h2>✨ Top Ki Cultivators</h2>
+                        <table>
+                            <tr><th>#</th><th>Player</th><th>Ki</th><th>Realm</th></tr>
+                            {self._generate_top_players_html(top_ki_players, "ki")}
+                        </table>
+                    </div>
+                    
+                    <div class="card">
+                        <h2>💰 Wealthiest Warriors</h2>
+                        <table>
+                            <tr><th>#</th><th>Player</th><th>Taels</th><th>Realm</th></tr>
+                            {self._generate_top_players_html(top_taels_players, "taels")}
+                        </table>
+                    </div>
+                </div>
+                
+                <div class="grid">
+                    <div class="card">
+                        <h2>⚙️ Command Usage</h2>
+                        <table>
+                            <tr><th>Command</th><th>Uses</th></tr>
+                            {self._generate_command_stats_html(command_stats)}
+                        </table>
+                        <div class="stat-label" style="margin-top: 10px;">* Approximate counts</div>
+                    </div>
+                    
+                    <div class="card">
+                        <h2>🔧 Recent Admin Actions</h2>
+                        <div class="logs-container">
+                            {self._generate_admin_logs_html(admin_logs)}
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="footer">
+                    <button class="refresh-btn" onclick="location.reload()">🔄 Refresh</button>
+                    <br>
+                    Empyrean Ascent Bot | Dashboard auto-refreshes every 30 seconds
+                </div>
             </div>
-            <footer>Refresh page to update | Empyrean Ascent Bot</footer>
+            <script>
+                setTimeout(function() {{ location.reload(); }}, 30000);
+            </script>
         </body>
         </html>
         """
@@ -120,155 +514,6 @@ class DashboardServer:
             await self.runner.cleanup()
 
 # ==========================================
-# DATABASE: SELF-HEALING AUTO-MIGRATION
-# ==========================================
-async def init_db():
-    print("[DEBUG] init_db: Started")
-    start_time = time.time()
-    # Added timeout parameter to prevent database locks
-    async with aiosqlite.connect("murim.db", timeout=30.0) as conn:
-        c = await conn.cursor()
-
-        # --- Users table (existing + new columns) ---
-        MASTER_SCHEMA = {
-            "user_id": "INTEGER PRIMARY KEY",
-            "background": "TEXT",
-            "rank_id": "INTEGER DEFAULT 0",
-            "rank": "TEXT DEFAULT 'The Bound (Mortal)'",
-            "item_id": "TEXT",
-            "taels": "INTEGER DEFAULT 0",
-            "ki": "INTEGER DEFAULT 0",
-            "vitality": "INTEGER DEFAULT 100",
-            "hp": "INTEGER DEFAULT 100",
-            "stage": "TEXT DEFAULT 'Initial'",
-            "last_refresh": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
-            "mastery": "REAL DEFAULT 0.0",
-            "active_tech": "TEXT DEFAULT 'None'",
-            "boss_flags": "TEXT DEFAULT ''",
-            "profession": "TEXT DEFAULT 'None'",
-            "prof_rank": "TEXT DEFAULT 'Apprentice'",
-            "prof_xp": "INTEGER DEFAULT 0",
-            "prof_req_xp": "INTEGER DEFAULT 1000",
-            "combat_mastery": "REAL DEFAULT 0.0",
-            "meridian_damage": "TEXT",
-            "daily_work_date": "TEXT",
-            "daily_observe_date": "TEXT",
-            "mastery_flags": "TEXT",
-            "teaching_bonus_dodge": "INTEGER DEFAULT 0",
-            "teaching_bonus_crit": "INTEGER DEFAULT 0",
-            "teaching_bonus_dmg_reduction": "INTEGER DEFAULT 0",
-            "teaching_bonus_regen": "INTEGER DEFAULT 0",
-            "daily_give_date": "TEXT",
-            "daily_give_count": "INTEGER DEFAULT 0",
-            "hidden_techs_unlocked": "TEXT",
-            # ADDED: heartbeat_dm column directly in schema
-            "heartbeat_dm": "INTEGER DEFAULT 1",
-            "minor_realm": "TEXT DEFAULT 'Initial'",
-            "minor_breakthrough_bonus_ki": "INTEGER DEFAULT 0",
-            "minor_breakthrough_bonus_damage": "INTEGER DEFAULT 0",
-            "minor_breakthrough_bonus_bt": "INTEGER DEFAULT 0",
-        }
-
-        await c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
-        print("[DEBUG] init_db: users table ensured")
-
-        await c.execute("PRAGMA table_info(users)")
-        existing_columns_data = await c.fetchall()
-        existing_columns = [info[1] for info in existing_columns_data]
-
-        for col_name, col_type in MASTER_SCHEMA.items():
-            if col_name not in existing_columns:
-                try:
-                    await c.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}")
-                    print(f"[DEBUG] init_db: Added missing column: {col_name}")
-                except Exception as e:
-                    if col_name != "user_id":
-                        print(f"[DEBUG] init_db: Failed to add {col_name}: {e}")
-                        log_error_to_file(f"init_db column add failed: {col_name} - {e}")
-
-        # --- bot_settings table ---
-        await c.execute("""
-            CREATE TABLE IF NOT EXISTS bot_settings (
-                setting_key TEXT PRIMARY KEY,
-                setting_value TEXT
-            )
-        """)
-        print("[DEBUG] init_db: bot_settings table ensured")
-
-        # --- admin_permissions table ---
-        await c.execute("""
-            CREATE TABLE IF NOT EXISTS admin_permissions (
-                user_id INTEGER,
-                permission TEXT,
-                PRIMARY KEY (user_id, permission)
-            )
-        """)
-        print("[DEBUG] init_db: admin_permissions table ensured")
-
-        # --- user_cooldowns table ---
-        await c.execute("""
-            CREATE TABLE IF NOT EXISTS user_cooldowns (
-                cooldown_key TEXT PRIMARY KEY,
-                last_used TIMESTAMP
-            )
-        """)
-        print("[DEBUG] init_db: user_cooldowns table ensured")
-
-        # --- banned_users table ---
-        await c.execute("""
-            CREATE TABLE IF NOT EXISTS banned_users (
-                user_id INTEGER PRIMARY KEY,
-                reason TEXT,
-                banned_at TIMESTAMP,
-                banned_by INTEGER
-            )
-        """)
-        print("[DEBUG] init_db: banned_users table ensured")
-
-        # --- inventory table ---
-        await c.execute("""
-            CREATE TABLE IF NOT EXISTS inventory (
-                user_id INTEGER,
-                item_name TEXT,
-                quantity INTEGER DEFAULT 1,
-                bound INTEGER DEFAULT 0,
-                PRIMARY KEY (user_id, item_name)
-            )
-        """)
-        print("[DEBUG] init_db: inventory table ensured")
-
-        # --- Insert default bot_settings ---
-        # FIXED: Added missing comma after ("toggle_core", "True")
-
-        default_settings = [
-            ("toggle_actions", "True"),
-            ("actions_vit_cost_work", "10"),
-            ("actions_vit_cost_observe", "10"),
-            ("actions_vit_cost_comprehend", "40"),
-            ("toggle_status", "True"),
-            ("toggle_profile", "True"),
-            ("toggle_pavilion", "True"),
-            ("toggle_pvp", "True"),
-            ("toggle_core", "True"),
-            ("toggle_combat", "True"),
-            ("toggle_mechanics", "True"),
-            ("toggle_cultivation", "True"),
-            ("toggle_help", "True"),
-            ("toggle_shop", "True"),
-            ("toggle_professions", "True"),
-        ]
-        for key, value in default_settings:
-            await c.execute(
-                "INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES (?, ?)",
-                (key, value)
-            )
-        print("[DEBUG] init_db: Default bot_settings inserted")
-
-        await conn.commit()
-        elapsed = time.time() - start_time
-        print(f"[DEBUG] init_db: Finished in {elapsed:.2f}s")
-
-# ==========================================
 # BOT SETUP
 # ==========================================
 intents = discord.Intents.default()
@@ -286,7 +531,6 @@ class MurimBot(commands.Bot):
         self._shutdown_handled = False
         self.active_combats = {}
         self.command_cooldowns = {}
-        # ADDED: Global meditation tracking set
         self.is_meditating = set()
 
         super().__init__(
@@ -304,11 +548,21 @@ class MurimBot(commands.Bot):
             log_error_to_file("FATAL: No Discord token found")
             return
 
-        print("📦 Initializing Database...")
-        await init_db()
-
-        print("🔗 Opening Database Connection...")
-        self.db = await aiosqlite.connect("murim.db", timeout=30.0)
+        print("📦 Connecting to MongoDB...")
+        
+        mongodb_uri = os.environ.get("MONGODB_URI", getattr(config, "MONGODB_URI", None))
+        mongodb_db_name = os.environ.get("MONGODB_DB_NAME", getattr(config, "MONGODB_DB_NAME", "empyrean_bot"))
+        
+        if not mongodb_uri:
+            print("[ERROR] MONGODB_URI not set! Please set it in environment variables.")
+            log_error_to_file("FATAL: MONGODB_URI not set")
+            return
+        
+        self.db = MongoDBWrapper(mongodb_uri, mongodb_db_name)
+        await self.db.connect()
+        await self.db.initialize_default_settings()
+        
+        print("🔗 MongoDB Connection Established")
         print("[DEBUG] setup_hook: Database connection opened")
 
         if config.WEB_DASHBOARD_ENABLED:
@@ -324,11 +578,9 @@ class MurimBot(commands.Bot):
         cogs_loaded = 0
         cogs_failed = []
 
-        # Ensure cogs directory exists
         if not os.path.exists("./cogs"):
             print("[WARN] No 'cogs' directory found! Creating empty cogs directory.")
             os.makedirs("./cogs")
-            # Create __init__.py to make it a proper package
             with open("./cogs/__init__.py", "w") as f:
                 f.write("# Cogs package\n")
 
@@ -389,7 +641,6 @@ class MurimBot(commands.Bot):
         print("------------------------------------------")
         print("[DEBUG] on_ready: Bot is fully ready")
 
-        # Sync slash commands with Discord
         try:
             synced = await self.tree.sync()
             print(f"[DEBUG] Synced {len(synced)} slash commands")

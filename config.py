@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ==========================================
-# BOT  CORE
+# BOT CORE
 # ==========================================
 TOKEN = os.getenv('DISCORD_TOKEN')
 PREFIX = "!"
@@ -29,18 +29,25 @@ STALE_RATION_COST = 1
 COLOR_MURIM = 0x700000
 
 # ==========================================
-# DATABASE PATH
+# DATABASE PATH (kept for compatibility, but MongoDB is now used)
 # ==========================================
 DB_PATH = "murim.db"
+
+# ==========================================
+# MONGODB ATLAS
+# ==========================================
+# Replace the placeholders with your actual MongoDB credentials
+MONGODB_URI = os.getenv("MONGODB_URI", "mongodb+srv://USERNAME:PASSWORD@cluster.mongodb.net/")
+MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "empyrean_bot")
 
 # ==========================================
 # WEB DASHBOARD (from main.py)
 # ==========================================
 WEB_DASHBOARD_ENABLED = True
 WEB_DASHBOARD_PORT = 8080
-STARTUP_ANNOUNCE_CHANNEL_ID = 0   # Put your channel ID here, 0 = disabled
-ERROR_LOG_CHANNEL_ID = 1506225893075320882         # Channel ID for error logs (Issue #21)
-ADMIN_LOG_CHANNEL_ID = 1506225842521378897  # Channel ID for admin command logs (0 = disabled)
+STARTUP_ANNOUNCE_CHANNEL_ID = 1507465098057486559   # Put your channel ID here, 0 = disabled
+ERROR_LOG_CHANNEL_ID = 1506225893075320882          # Put your error log channel ID here
+ADMIN_LOG_CHANNEL_ID = 1506225842521378897          # Put your admin log channel ID here
 
 # ==========================================
 # IDEA 3: FEATURE TOGGLES (Default values)

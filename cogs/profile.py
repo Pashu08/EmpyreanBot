@@ -91,11 +91,11 @@ class Profile(commands.Cog):
         total_qty = 0
         unique_count = 0
         try:
-            async with db.execute("SELECT quantity FROM inventory WHERE user_id = ?", (user_id,)) as cursor:
-                rows = await cursor.fetchall()
-                for row in rows:
-                    total_qty += row[0]
-                    unique_count += 1
+            cursor = db.inventory.find({"user_id": user_id})
+            items = await cursor.to_list(length=100)
+            for item in items:
+                total_qty += item.get("quantity", 0)
+                unique_count += 1
         except Exception as e:
             print(f"[DEBUG] profile._get_inventory_summary: Error - {e}")
         return total_qty, unique_count
@@ -113,18 +113,18 @@ class Profile(commands.Cog):
         target = member or ctx.author
         db = self.bot.db
 
-        # OPTIMIZED: Single query to fetch all user data
-        async with db.execute("""
-            SELECT background, taels, active_tech, profession,
-                   daily_work_date, daily_observe_date, mastery_flags
-            FROM users WHERE user_id = ?
-        """, (target.id,)) as cursor:
-            row = await cursor.fetchone()
-
-        if not row:
+        # Single query to fetch all user data using MongoDB
+        user = await db.users.find_one({"user_id": target.id})
+        if not user:
             return await ctx.send(config.MSG_NOT_REGISTERED, ephemeral=True)
 
-        bg, taels, active_tech, profession, work_date, observe_date, mastery_flags = row
+        bg = user.get("background", "Unknown")
+        taels = user.get("taels", 0)
+        active_tech = user.get("active_tech", "None")
+        profession = user.get("profession", "None")
+        work_date = user.get("daily_work_date")
+        observe_date = user.get("daily_observe_date")
+        mastery_flags = user.get("mastery_flags")
 
         # Fetch inventory summary
         total_items, unique_items = await self._get_inventory_summary(target.id)
@@ -153,7 +153,6 @@ class Profile(commands.Cog):
         if hidden:
             hidden_line = f"**{hidden}** (discovered!)"
         elif active_tech != "None" and reached >= 3:
-            # Player has 75%+ mastery, hint that something is near
             hidden_line = "*You feel a deeper power within this technique...*"
         elif active_tech != "None":
             hidden_line = "*The true depth of this technique remains hidden...*"

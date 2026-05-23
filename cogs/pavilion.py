@@ -66,11 +66,11 @@ class PavilionView(discord.ui.View):
             return await interaction.response.send_message("❌ Please select a technique first.", ephemeral=True)
 
         db = self.bot.db
-        await db.execute(
-            "UPDATE users SET active_tech = ?, mastery = 0.0 WHERE user_id = ?",
-            (self.selected_tech, self.member_id)
+        # Update user's active technique using MongoDB
+        await db.users.update_one(
+            {"user_id": self.member_id},
+            {"$set": {"active_tech": self.selected_tech, "mastery": 0.0}}
         )
-        await db.commit()
 
         # Check for hidden technique unlocks
         hidden_unlocked = await self._check_hidden_techniques(interaction.user.id)
@@ -88,13 +88,10 @@ class PavilionView(discord.ui.View):
 
     async def _check_hidden_techniques(self, user_id):
         """Check if user has unlocked any hidden techniques based on mastered techniques."""
-        # This is a placeholder – you will implement actual hidden technique logic later.
-        # For now, it checks a hypothetical 'hidden_techs_unlocked' column.
         db = self.bot.db
-        async with db.execute("SELECT hidden_techs_unlocked FROM users WHERE user_id = ?", (user_id,)) as cursor:
-            row = await cursor.fetchone()
-            if row and row[0]:
-                return f"You have unlocked: {row[0]}"
+        user = await db.users.find_one({"user_id": user_id})
+        if user and user.get("hidden_techs_unlocked"):
+            return f"You have unlocked: {user['hidden_techs_unlocked']}"
         return None
 
 class Pavilion(commands.Cog):
@@ -121,13 +118,15 @@ class Pavilion(commands.Cog):
             return await ctx.send(config.MSG_ALREADY_MEDITATING, ephemeral=True)
 
         db = self.bot.db
-        async with db.execute("SELECT rank, ki, active_tech, mastery FROM users WHERE user_id = ?", (ctx.author.id,)) as cursor:
-            user = await cursor.fetchone()
+        user = await db.users.find_one({"user_id": ctx.author.id})
 
         if not user:
             return await ctx.send(config.MSG_NOT_REGISTERED, ephemeral=True)
 
-        rank, ki, active_tech, mastery = user
+        rank = user.get("rank", "The Bound (Mortal)")
+        ki = user.get("ki", 0)
+        active_tech = user.get("active_tech", "None")
+        mastery = user.get("mastery", 0.0)
 
         if "Mortal" in rank and ki < 100:
             return await ctx.send("❌ The scrolls are sealed. You need **100 Ki** to understand these foundations.", ephemeral=True)
@@ -140,7 +139,6 @@ class Pavilion(commands.Cog):
             )
             return await ctx.send(embed=embed)
 
-        # Get available techniques (all from constants for now – hidden ones filtered later)
         available_techs = list(TECHNIQUES.keys())
 
         view = PavilionView(ctx, ctx.author.id, self.bot, available_techs)
@@ -163,13 +161,14 @@ class Pavilion(commands.Cog):
         user_id = ctx.author.id
         db = self.bot.db
 
-        async with db.execute("SELECT active_tech, mastery, taels FROM users WHERE user_id = ?", (user_id,)) as cursor:
-            user = await cursor.fetchone()
+        user = await db.users.find_one({"user_id": user_id})
 
         if not user:
             return await ctx.send(config.MSG_NOT_REGISTERED, ephemeral=True)
 
-        active_tech, mastery, taels = user
+        active_tech = user.get("active_tech", "None")
+        mastery = user.get("mastery", 0.0)
+        taels = user.get("taels", 0)
 
         if active_tech == "None":
             return await ctx.send("❌ You are not currently focusing on any technique.", ephemeral=True)
@@ -187,10 +186,11 @@ class Pavilion(commands.Cog):
             if interaction.user.id != user_id:
                 return await interaction.response.send_message("❌ Not your command.", ephemeral=True)
 
-            # Deduct Taels and reset technique
             new_taels = taels - RESET_COST
-            await db.execute("UPDATE users SET active_tech = 'None', mastery = 0.0, taels = ? WHERE user_id = ?", (new_taels, user_id))
-            await db.commit()
+            await db.users.update_one(
+                {"user_id": user_id},
+                {"$set": {"active_tech": "None", "mastery": 0.0, "taels": new_taels}}
+            )
 
             embed = discord.Embed(
                 title="🔄 Technique Reset",

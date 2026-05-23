@@ -38,7 +38,9 @@ class HelpSelect(discord.ui.Select):
                 "**`!start`** — Begin your journey and choose a background.\n"
                 "**`!stats`** (alias `!st`) — View your Rank, Ki, Mastery, and Meridian Health.\n"
                 "**`!profile`** (alias `!prof`) — View detailed character sheet.\n"
-                "**`!pstatus`** — View your professional rank and progress."
+                "**`!pstatus`** — View your professional rank and progress.\n"
+                "**`!afk`** (alias `!away`) — Check your AFK gains.\n"
+                "**`!pouch`** (alias `!money`, `!wealth`) — Check your Taels."
             )
         elif self.values[0] == "Cultivation & Training":
             embed.title = "🌀 Path of Power"
@@ -48,7 +50,8 @@ class HelpSelect(discord.ui.Select):
                 "**`!pavilion`** (alias `!pav`) — Choose or view your active technique.\n"
                 "**`!techniques`** (alias `!techs`) — List all available techniques.\n"
                 "**`!reset_technique`** — Abandon your current technique (costs 500 Taels).\n"
-                "**`!breakthrough`** — Attempt to reach the next Major Realm."
+                "**`!breakthrough`** (alias `!bt`) — Attempt to reach the next Major Realm.\n"
+                "**`!breakthrough_status`** (alias `!btst`) — Check breakthrough progress and bonuses."
             )
         elif self.values[0] == "Combat & Warfare":
             embed.title = "⚔️ Martial Conflict"
@@ -66,7 +69,8 @@ class HelpSelect(discord.ui.Select):
                 "**`!buy <item> [qty]`** — Purchase an item.\n"
                 "**`!sell <item> [qty]`** — Sell an item.\n"
                 "**`!give @user <item> [qty]`** — Give an item to another player.\n"
-                "**`!search <item>`** — Find which shop sells an item."
+                "**`!search <item>`** — Find which shop sells an item.\n"
+                "**`!pouch`** (alias `!money`, `!wealth`) — Check your Taels."
             )
         elif self.values[0] == "Daily Actions & Recovery":
             embed.title = "🏮 Daily Actions & Recovery"
@@ -77,7 +81,8 @@ class HelpSelect(discord.ui.Select):
                 "**`!meditate`** — Check next heartbeat.\n"
                 "**`!focus`** — Convert Vitality to Ki.\n"
                 "**`!rest`** — Instantly restore HP and Vitality.\n"
-                "**`!toggle_dm`** — Enable/disable heartbeat DMs."
+                "**`!toggle_dm`** — Enable/disable heartbeat DMs.\n"
+                "**`!afk`** (alias `!away`) — Check your AFK gains."
             )
 
         embed.set_footer(text="The heavens watch every step you take.")
@@ -117,7 +122,8 @@ class Help(commands.Cog):
             description=(
                 "Welcome to the world of Empyrean Ascent.\n\n"
                 "Select a category below to begin your study.\n"
-                "💡 **Tip:** Many commands have short aliases (e.g., `!st` for `!stats`)."
+                "💡 **Tip:** Many commands have short aliases (e.g., `!st` for `!stats`).\n\n"
+                "⚙️ **Admin commands** are available via `!divine` (admin only)."
             ),
             color=format_embed_color("main")
         )

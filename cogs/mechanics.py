@@ -6,7 +6,7 @@ import discord
 from discord.ext import commands, tasks
 
 from utils.helpers import get_max_stats
-from utils.db import get_bot_setting  # ADDED for feature toggle
+from utils.db import get_bot_setting
 
 log = logging.getLogger(__name__)
 
@@ -14,18 +14,13 @@ class Mechanics(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.meditating: set[int] = set()
-        self.meditation_start_times: dict[int, datetime.datetime] = {}  # Track when meditation started
-        # Initialise bot-level set once, so cancel never crashes
+        self.meditation_start_times: dict[int, datetime.datetime] = {}
         if not hasattr(self.bot, "is_meditating"):
             self.bot.is_meditating = set()
         self.recover_cooldowns: dict[int, datetime.datetime] = {}
         self.focus_cooldowns:   dict[int, datetime.datetime] = {}
         self.rest_cooldowns:    dict[int, datetime.datetime] = {}
         self.bot.loop.create_task(self._delayed_start())
-
-    # ------------------------------------------------------------------
-    # Feature toggle helper (ADDED)
-    # ------------------------------------------------------------------
 
     async def _is_feature_enabled(self, ctx):
         enabled = await get_bot_setting(self.bot.db, "toggle_mechanics", True)
@@ -40,10 +35,6 @@ class Mechanics(commands.Cog):
             )
         return enabled
 
-    # ------------------------------------------------------------------
-    # Startup
-    # ------------------------------------------------------------------
-
     async def _delayed_start(self):
         await self.bot.wait_until_ready()
         self.heartbeat.start()
@@ -53,20 +44,23 @@ class Mechanics(commands.Cog):
         self.heartbeat.cancel()
 
     # ------------------------------------------------------------------
-    # Heartbeat
+    # Heartbeat (MongoDB version)
     # ------------------------------------------------------------------
-
     @tasks.loop(minutes=20.0)
     async def heartbeat(self):
         db = self.bot.db
-        async with db.execute(
-            "SELECT user_id, hp, vitality, rank, heartbeat_dm FROM users"
-        ) as cursor:
-            users = await cursor.fetchall()
+        cursor = db.users.find({})
+        users = await cursor.to_list(length=1000)
 
         dm_count = 0
 
-        for u_id, current_hp, current_vit, rank, dm_enabled in users:
+        for user in users:
+            u_id = user.get("user_id")
+            current_hp = user.get("hp", 0)
+            current_vit = user.get("vitality", 0)
+            rank = user.get("rank", "The Bound (Mortal)")
+            dm_enabled = user.get("heartbeat_dm", 1)
+
             if "Second-Rate" in rank:
                 regen = 100
             elif "Third-Rate" in rank:
@@ -75,18 +69,18 @@ class Mechanics(commands.Cog):
                 regen = 25
 
             max_stats = get_max_stats(rank)
-            new_hp  = min(current_hp  + regen, max_stats["max_hp"])
+            new_hp = min(current_hp + regen, max_stats["max_hp"])
             new_vit = min(current_vit + regen, max_stats["max_vit"])
 
-            hp_gain  = new_hp  - current_hp
+            hp_gain = new_hp - current_hp
             vit_gain = new_vit - current_vit
 
             if hp_gain == 0 and vit_gain == 0:
                 continue
 
-            await db.execute(
-                "UPDATE users SET hp = ?, vitality = ? WHERE user_id = ?",
-                (new_hp, new_vit, u_id),
+            await db.users.update_one(
+                {"user_id": u_id},
+                {"$set": {"hp": new_hp, "vitality": new_vit}}
             )
 
             if dm_enabled:
@@ -105,36 +99,27 @@ class Mechanics(commands.Cog):
                             ),
                             color=0x43B581,
                         )
-                        embed.set_footer(
-                            text="You can disable these DMs with /toggle_dm"
-                        )
+                        embed.set_footer(text="You can disable these DMs with /toggle_dm")
                         await user_obj.send(embed=embed)
                     except discord.Forbidden:
                         pass
                     except discord.HTTPException as e:
-                        if e.status == 429:  # Rate limited
+                        if e.status == 429:
                             await asyncio.sleep(2)
                             log.warning(f"Heartbeat DM rate limited for user {u_id}")
-
-        await db.commit()
 
     @heartbeat.before_loop
     async def before_heartbeat(self):
         await self.bot.wait_until_ready()
 
     # ------------------------------------------------------------------
-    # Helpers
+    # Helpers (unchanged)
     # ------------------------------------------------------------------
-
     @staticmethod
     def _utcnow() -> datetime.datetime:
-        """Consistent timezone-aware 'now' used everywhere in this cog."""
         return datetime.datetime.now(datetime.timezone.utc)
 
-    def _cooldown_remaining(
-        self, store: dict[int, datetime.datetime], user_id: int
-    ) -> int | None:
-        """Return seconds remaining on a cooldown, or None if expired/absent."""
+    def _cooldown_remaining(self, store: dict[int, datetime.datetime], user_id: int) -> int | None:
         end = store.get(user_id)
         if end is None:
             return None
@@ -142,12 +127,9 @@ class Mechanics(commands.Cog):
         return int(remaining) if remaining > 0 else None
 
     # ------------------------------------------------------------------
-    # toggle_dm
+    # toggle_dm (MongoDB version)
     # ------------------------------------------------------------------
-
-    @commands.hybrid_command(
-        name="toggle_dm", description="Enable/disable heartbeat recovery DMs"
-    )
+    @commands.hybrid_command(name="toggle_dm", description="Enable/disable heartbeat recovery DMs")
     async def toggle_dm(self, ctx):
         print(f"[DEBUG] mechanics.toggle_dm: Called by {ctx.author.id}")
 
@@ -155,12 +137,9 @@ class Mechanics(commands.Cog):
             return
 
         db = self.bot.db
-        async with db.execute(
-            "SELECT heartbeat_dm FROM users WHERE user_id = ?", (ctx.author.id,)
-        ) as cur:
-            row = await cur.fetchone()
+        user = await db.users.find_one({"user_id": ctx.author.id})
 
-        if not row:
+        if not user:
             return await ctx.send(
                 embed=discord.Embed(
                     title="❌ Not Registered",
@@ -170,12 +149,13 @@ class Mechanics(commands.Cog):
                 ephemeral=True,
             )
 
-        new = 0 if row[0] else 1
-        await db.execute(
-            "UPDATE users SET heartbeat_dm = ? WHERE user_id = ?",
-            (new, ctx.author.id),
+        current = user.get("heartbeat_dm", 1)
+        new = 0 if current else 1
+
+        await db.users.update_one(
+            {"user_id": ctx.author.id},
+            {"$set": {"heartbeat_dm": new}}
         )
-        await db.commit()
 
         await ctx.send(
             embed=discord.Embed(
@@ -187,13 +167,9 @@ class Mechanics(commands.Cog):
         )
 
     # ------------------------------------------------------------------
-    # recover
+    # recover (MongoDB version)
     # ------------------------------------------------------------------
-
-    @commands.hybrid_command(
-        name="recover",
-        description="Meditate for 60 s to restore Vitality and Ki (5 min cooldown)",
-    )
+    @commands.hybrid_command(name="recover", description="Meditate for 60 s to restore Vitality and Ki (5 min cooldown)")
     async def recover(self, ctx):
         print(f"[DEBUG] mechanics.recover: Called by {ctx.author.id}")
 
@@ -268,13 +244,9 @@ class Mechanics(commands.Cog):
             return
 
         db = self.bot.db
-        async with db.execute(
-            "SELECT rank, ki, vitality, background FROM users WHERE user_id = ?",
-            (user_id,),
-        ) as cursor:
-            row = await cursor.fetchone()
+        user = await db.users.find_one({"user_id": user_id})
 
-        if not row:
+        if not user:
             return await ctx.send(
                 embed=discord.Embed(
                     title="❌ Not Registered",
@@ -283,20 +255,23 @@ class Mechanics(commands.Cog):
                 )
             )
 
-        rank, current_ki, current_vit, background = row
+        rank = user.get("rank", "The Bound (Mortal)")
+        current_ki = user.get("ki", 0)
+        current_vit = user.get("vitality", 0)
+        background = user.get("background", "")
+
         max_stats = get_max_stats(rank)
 
         vit_gain = 35 if background == "Hermit" else 25
-        ki_gain  = 15 if background == "Hermit" else 5
+        ki_gain = 15 if background == "Hermit" else 5
 
         new_vit = min(max_stats["max_vit"], current_vit + vit_gain)
-        new_ki  = min(max_stats["ki_cap"],  current_ki  + ki_gain)
+        new_ki = min(max_stats["ki_cap"], current_ki + ki_gain)
 
-        await db.execute(
-            "UPDATE users SET vitality = ?, ki = ? WHERE user_id = ?",
-            (new_vit, new_ki, user_id),
+        await db.users.update_one(
+            {"user_id": user_id},
+            {"$set": {"vitality": new_vit, "ki": new_ki}}
         )
-        await db.commit()
 
         self.recover_cooldowns[user_id] = self._utcnow() + datetime.timedelta(minutes=5)
 
@@ -313,9 +288,8 @@ class Mechanics(commands.Cog):
         )
 
     # ------------------------------------------------------------------
-    # cancel
+    # cancel (unchanged)
     # ------------------------------------------------------------------
-
     @commands.hybrid_command(name="cancel", description="Cancel active meditation")
     async def cancel_meditation(self, ctx):
         print(f"[DEBUG] mechanics.cancel_meditation: Called by {ctx.author.id}")
@@ -360,12 +334,9 @@ class Mechanics(commands.Cog):
             )
 
     # ------------------------------------------------------------------
-    # meditate (status)
+    # meditate_status (MongoDB version)
     # ------------------------------------------------------------------
-
-    @commands.hybrid_command(
-        name="meditate", description="Check next heartbeat and your stats"
-    )
+    @commands.hybrid_command(name="meditate", description="Check next heartbeat and your stats")
     async def meditate_status(self, ctx):
         print(f"[DEBUG] mechanics.meditate_status: Called by {ctx.author.id}")
 
@@ -389,13 +360,9 @@ class Mechanics(commands.Cog):
         seconds = int(left.total_seconds() % 60)
 
         db = self.bot.db
-        async with db.execute(
-            "SELECT rank, ki, vitality, hp FROM users WHERE user_id = ?",
-            (ctx.author.id,),
-        ) as cursor:
-            row = await cursor.fetchone()
+        user = await db.users.find_one({"user_id": ctx.author.id})
 
-        if not row:
+        if not user:
             return await ctx.send(
                 embed=discord.Embed(
                     title="❌ Not Registered",
@@ -405,18 +372,22 @@ class Mechanics(commands.Cog):
                 ephemeral=True,
             )
 
-        rank, ki, vit, hp = row
+        rank = user.get("rank", "The Bound (Mortal)")
+        ki = user.get("ki", 0)
+        vit = user.get("vitality", 0)
+        hp = user.get("hp", 0)
+
         max_stats = get_max_stats(rank)
-        ki_cap  = max_stats["ki_cap"]
+        ki_cap = max_stats["ki_cap"]
         vit_cap = max_stats["max_vit"]
-        hp_cap  = max_stats["max_hp"]
+        hp_cap = max_stats["max_hp"]
 
         from utils.constants import HEARTBEAT_REGEN
         regen = HEARTBEAT_REGEN.get(rank, 25)
 
         ki_progress = int((ki / ki_cap) * 100) if ki_cap else 0
-        bar_filled  = int(ki_progress / 10)
-        ki_bar      = "█" * bar_filled + "░" * (10 - bar_filled)
+        bar_filled = int(ki_progress / 10)
+        ki_bar = "█" * bar_filled + "░" * (10 - bar_filled)
 
         recover_cd_text = ""
         rem = self._cooldown_remaining(self.recover_cooldowns, ctx.author.id)
@@ -448,13 +419,9 @@ class Mechanics(commands.Cog):
         await ctx.send(embed=embed, ephemeral=True)
 
     # ------------------------------------------------------------------
-    # focus
+    # focus (MongoDB version)
     # ------------------------------------------------------------------
-
-    @commands.hybrid_command(
-        name="focus",
-        description="Convert 10 Vitality into 5 Ki (5 min cooldown)",
-    )
+    @commands.hybrid_command(name="focus", description="Convert 10 Vitality into 5 Ki (5 min cooldown)")
     async def focus(self, ctx):
         print(f"[DEBUG] mechanics.focus: Called by {ctx.author.id}")
 
@@ -475,12 +442,9 @@ class Mechanics(commands.Cog):
             )
 
         db = self.bot.db
-        async with db.execute(
-            "SELECT vitality, ki, rank FROM users WHERE user_id = ?", (user_id,)
-        ) as cursor:
-            row = await cursor.fetchone()
+        user = await db.users.find_one({"user_id": user_id})
 
-        if not row:
+        if not user:
             return await ctx.send(
                 embed=discord.Embed(
                     title="❌ Not Registered",
@@ -490,7 +454,9 @@ class Mechanics(commands.Cog):
                 ephemeral=True,
             )
 
-        vit, ki, rank = row
+        vit = user.get("vitality", 0)
+        ki = user.get("ki", 0)
+        rank = user.get("rank", "The Bound (Mortal)")
         max_stats = get_max_stats(rank)
 
         if vit < 10:
@@ -504,13 +470,12 @@ class Mechanics(commands.Cog):
             )
 
         new_vit = vit - 10
-        new_ki  = min(max_stats["ki_cap"], ki + 5)
+        new_ki = min(max_stats["ki_cap"], ki + 5)
 
-        await db.execute(
-            "UPDATE users SET vitality = ?, ki = ? WHERE user_id = ?",
-            (new_vit, new_ki, user_id),
+        await db.users.update_one(
+            {"user_id": user_id},
+            {"$set": {"vitality": new_vit, "ki": new_ki}}
         )
-        await db.commit()
 
         self.focus_cooldowns[user_id] = self._utcnow() + datetime.timedelta(minutes=5)
 
@@ -527,13 +492,9 @@ class Mechanics(commands.Cog):
         )
 
     # ------------------------------------------------------------------
-    # rest
+    # rest (MongoDB version)
     # ------------------------------------------------------------------
-
-    @commands.hybrid_command(
-        name="rest",
-        description="Instantly restore 10 HP and 10 Vitality (1 hour cooldown)",
-    )
+    @commands.hybrid_command(name="rest", description="Instantly restore 10 HP and 10 Vitality (1 hour cooldown)")
     async def rest(self, ctx):
         print(f"[DEBUG] mechanics.rest: Called by {ctx.author.id}")
 
@@ -556,12 +517,9 @@ class Mechanics(commands.Cog):
             )
 
         db = self.bot.db
-        async with db.execute(
-            "SELECT hp, vitality, rank FROM users WHERE user_id = ?", (user_id,)
-        ) as cursor:
-            row = await cursor.fetchone()
+        user = await db.users.find_one({"user_id": user_id})
 
-        if not row:
+        if not user:
             return await ctx.send(
                 embed=discord.Embed(
                     title="❌ Not Registered",
@@ -571,16 +529,17 @@ class Mechanics(commands.Cog):
                 ephemeral=True,
             )
 
-        hp, vit, rank = row
+        hp = user.get("hp", 0)
+        vit = user.get("vitality", 0)
+        rank = user.get("rank", "The Bound (Mortal)")
         max_stats = get_max_stats(rank)
-        new_hp  = min(max_stats["max_hp"],  hp  + 10)
+        new_hp = min(max_stats["max_hp"], hp + 10)
         new_vit = min(max_stats["max_vit"], vit + 10)
 
-        await db.execute(
-            "UPDATE users SET hp = ?, vitality = ? WHERE user_id = ?",
-            (new_hp, new_vit, user_id),
+        await db.users.update_one(
+            {"user_id": user_id},
+            {"$set": {"hp": new_hp, "vitality": new_vit}}
         )
-        await db.commit()
 
         self.rest_cooldowns[user_id] = self._utcnow() + datetime.timedelta(hours=1)
 

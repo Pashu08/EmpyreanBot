@@ -35,9 +35,8 @@ class StartMenu(discord.ui.View):
 
         db = self.bot.db
 
-        # Check if user already exists
-        async with db.execute("SELECT user_id FROM users WHERE user_id = ?", (interaction.user.id,)) as cursor:
-            existing = await cursor.fetchone()
+        # Check if user already exists using MongoDB
+        existing = await db.users.find_one({"user_id": interaction.user.id})
         if existing:
             return await interaction.response.send_message(config.MSG_ALREADY_REGISTERED, ephemeral=True)
 
@@ -46,29 +45,47 @@ class StartMenu(discord.ui.View):
         item_name = bg_data.get("item", "Torn Page")
         now = datetime.datetime.now().isoformat()
 
-        # Insert into users table
-        await db.execute(
-            """INSERT INTO users (
-                user_id, background, rank, item_id, taels, ki, vitality, hp, stage, last_refresh
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                interaction.user.id,
-                background_name,
-                "The Bound (Mortal)",
-                item_name,
-                0,  # taels
-                0,  # ki
-                config.START_VITALITY,
-                config.START_HP,
-                "Initial",
-                now
-            )
-        )
+        # Insert into users collection
+        await db.users.insert_one({
+            "user_id": interaction.user.id,
+            "background": background_name,
+            "rank": "The Bound (Mortal)",
+            "rank_id": 0,
+            "item_id": item_name,
+            "taels": 0,
+            "ki": 0,
+            "vitality": config.START_VITALITY,
+            "hp": config.START_HP,
+            "stage": "Initial",
+            "last_refresh": now,
+            "mastery": 0.0,
+            "active_tech": "None",
+            "boss_flags": "",
+            "profession": "None",
+            "prof_rank": "Apprentice",
+            "prof_xp": 0,
+            "prof_req_xp": 1000,
+            "combat_mastery": 0.0,
+            "meridian_damage": None,
+            "daily_work_date": None,
+            "daily_observe_date": None,
+            "mastery_flags": None,
+            "teaching_bonus_dodge": 0,
+            "teaching_bonus_crit": 0,
+            "teaching_bonus_dmg_reduction": 0,
+            "teaching_bonus_regen": 0,
+            "daily_give_date": None,
+            "daily_give_count": 0,
+            "hidden_techs_unlocked": None,
+            "heartbeat_dm": 1,
+            "minor_realm": "Initial",
+            "minor_breakthrough_bonus_ki": 0,
+            "minor_breakthrough_bonus_damage": 0,
+            "minor_breakthrough_bonus_bt": 0,
+        })
 
         # Add starting item to inventory (bound = 1, cannot be sold/traded)
         await add_item(db, interaction.user.id, item_name, 1, bound=True)
-
-        await db.commit()
 
         print(f"[DEBUG] core.StartMenu.handle_start: Character created for {interaction.user.id} with item {item_name}")
 
@@ -117,7 +134,6 @@ class StartMenu(discord.ui.View):
             await user.send(embed=embed)
             print(f"[DEBUG] core.StartMenu._send_tutorial: DM sent to {user.id}")
         except discord.Forbidden:
-            # Fallback: send in the channel (ephemeral)
             await interaction.followup.send(embed=embed, ephemeral=True)
             print(f"[DEBUG] core.StartMenu._send_tutorial: DM failed, sent in channel for {user.id}")
 
@@ -160,9 +176,8 @@ class Core(commands.Cog):
         user_id = ctx.author.id
         db = self.bot.db
 
-        # Check if user already exists
-        async with db.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,)) as cursor:
-            existing = await cursor.fetchone()
+        # Check if user already exists using MongoDB
+        existing = await db.users.find_one({"user_id": user_id})
         if existing:
             return await ctx.send(config.MSG_ALREADY_REGISTERED, ephemeral=True)
 

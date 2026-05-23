@@ -4,7 +4,7 @@ import random
 import asyncio
 import datetime
 from utils.helpers import format_embed_color
-from utils.db import get_bot_setting, is_user_banned, get_user_stat, update_user_stat
+from utils.db import get_bot_setting, is_user_banned
 from utils.constants import PVP_DAMAGE_RANGE
 import config
 
@@ -35,18 +35,33 @@ class SparView(discord.ui.View):
             return
         self.ended = True
 
+        db = self.bot.db
+
         # Restore both players' original HP and Vitality (no permanent loss)
         for user_id, stats in self.pre_spar_stats.items():
-            await update_user_stat(self.bot.db, user_id, "hp", stats["hp"])
-            await update_user_stat(self.bot.db, user_id, "vitality", stats["vitality"])
+            await db.users.update_one(
+                {"user_id": user_id},
+                {"$set": {"hp": stats["hp"], "vitality": stats["vitality"]}}
+            )
 
         # Handle Taels bet
         if self.bet_amount > 0:
-            # Deduct from loser, add to winner
-            loser_taels = await get_user_stat(self.bot.db, loser.id, "taels") or 0
-            winner_taels = await get_user_stat(self.bot.db, winner.id, "taels") or 0
-            await update_user_stat(self.bot.db, loser.id, "taels", loser_taels - self.bet_amount)
-            await update_user_stat(self.bot.db, winner.id, "taels", winner_taels + self.bet_amount)
+            # Get current Taels
+            loser_user = await db.users.find_one({"user_id": loser.id})
+            winner_user = await db.users.find_one({"user_id": winner.id})
+            
+            loser_taels = loser_user.get("taels", 0) if loser_user else 0
+            winner_taels = winner_user.get("taels", 0) if winner_user else 0
+            
+            # Update Taels
+            await db.users.update_one(
+                {"user_id": loser.id},
+                {"$set": {"taels": loser_taels - self.bet_amount}}
+            )
+            await db.users.update_one(
+                {"user_id": winner.id},
+                {"$set": {"taels": winner_taels + self.bet_amount}}
+            )
             bet_text = f"\n💰 {winner.display_name} won **{self.bet_amount} Taels**!"
         else:
             bet_text = ""
@@ -140,7 +155,9 @@ class PvP(commands.Cog):
             return await ctx.send(f"⏳ You must wait **{remaining} seconds** before sparring again.", ephemeral=True)
 
         # Minimum rank check (Third-Rate Warrior)
-        rank = await get_user_stat(self.bot.db, ctx.author.id, "rank") or "The Bound (Mortal)"
+        db = self.bot.db
+        user = await db.users.find_one({"user_id": ctx.author.id})
+        rank = user.get("rank", "The Bound (Mortal)") if user else "The Bound (Mortal)"
         if "Third-Rate" not in rank and "Second-Rate" not in rank and "First-Rate" not in rank and "Peak Master" not in rank:
             return await ctx.send("❌ You must be at least **Third-Rate Warrior** to spar.", ephemeral=True)
 
@@ -164,19 +181,22 @@ class PvP(commands.Cog):
             MIN_BET = 10
             if bet < MIN_BET:
                 return await ctx.send(f"❌ Minimum bet is **{MIN_BET} Taels**.", ephemeral=True)
-            author_taels = await get_user_stat(self.bot.db, ctx.author.id, "taels") or 0
+            author_taels = user.get("taels", 0) if user else 0
             if author_taels < bet:
                 return await ctx.send(f"❌ You don't have enough Taels. You have {author_taels}, bet is {bet}.", ephemeral=True)
 
         # Save pre-spar stats (HP and Vitality) for both players
+        challenger_user = await db.users.find_one({"user_id": ctx.author.id})
+        opponent_user = await db.users.find_one({"user_id": opponent.id})
+        
         pre_spar_stats = {
             ctx.author.id: {
-                "hp": await get_user_stat(self.bot.db, ctx.author.id, "hp") or 100,
-                "vitality": await get_user_stat(self.bot.db, ctx.author.id, "vitality") or 100,
+                "hp": challenger_user.get("hp", 100) if challenger_user else 100,
+                "vitality": challenger_user.get("vitality", 100) if challenger_user else 100,
             },
             opponent.id: {
-                "hp": await get_user_stat(self.bot.db, opponent.id, "hp") or 100,
-                "vitality": await get_user_stat(self.bot.db, opponent.id, "vitality") or 100,
+                "hp": opponent_user.get("hp", 100) if opponent_user else 100,
+                "vitality": opponent_user.get("vitality", 100) if opponent_user else 100,
             },
         }
 
@@ -193,7 +213,7 @@ class PvP(commands.Cog):
             if interaction.user != opponent:
                 return await interaction.response.send_message("❌ Only the opponent can accept.", ephemeral=True)
             if bet > 0:
-                opponent_taels = await get_user_stat(self.bot.db, opponent.id, "taels") or 0
+                opponent_taels = opponent_user.get("taels", 0) if opponent_user else 0
                 if opponent_taels < bet:
                     await interaction.response.edit_message(content=f"❌ {opponent.display_name} doesn't have enough Taels to accept the bet ({bet} required).", view=None)
                     return
