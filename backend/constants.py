@@ -1,5 +1,5 @@
 """
-constants.py - Game data and constants for Empyrean Bot
+backend/constants.py - Game data and constants for Empyrean Bot
 All game balance numbers are defined here for easy tuning.
 """
 
@@ -7,6 +7,12 @@ import logging
 log = logging.getLogger(__name__)
 
 print("[DEBUG] constants.py: Loading Murim game data...")
+
+# ==========================================
+# ADMIN CONSTANTS
+# ==========================================
+
+PERMANENT_GOD = 756012403291848804  # Hardcoded user ID - has all permissions
 
 # ==========================================
 # RANKS (ordered, index = rank_id)

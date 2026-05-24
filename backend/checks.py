@@ -1,26 +1,47 @@
+"""
+backend/checks.py - Command Guards (Decorators)
+All command pre-checks are defined here (registered, not_meditating, has_enough_ki, etc.)
+These are used by commands via @registered(), @has_enough_ki(15), etc.
+"""
+
 import datetime
 import functools
 from discord.ext import commands
-from utils import db as db_utils
+from backend import db as db_utils
 import config
 
 print("[DEBUG] checks.py: Loading command guards...")
+
 
 # ==========================================
 # HELPER: Get setting from database (MongoDB version)
 # ==========================================
 async def _get_setting(bot, key, default=None):
-    """Get a setting from bot_settings collection."""
+    """
+    Get a setting from bot_settings collection.
+    
+    Args:
+        bot: The bot instance
+        key (str): Setting key
+        default: Default value if not found
+        
+    Returns:
+        Any: Setting value (converted to int/bool if applicable)
+    """
     try:
         return await bot.db.get_bot_setting(key, default)
     except:
         return default
 
+
 # ==========================================
 # 1. REGISTERED CHECK
 # ==========================================
 def registered():
-    """Command guard: rejects if player hasn't used !start."""
+    """
+    Command guard: rejects if player hasn't used !start.
+    Usage: @registered()
+    """
     async def predicate(ctx):
         print(f"[DEBUG] checks.registered: Checking user {ctx.author.id}")
         if not await db_utils.user_exists(ctx.bot.db, ctx.author.id):
@@ -30,11 +51,15 @@ def registered():
         return True
     return commands.check(predicate)
 
+
 # ==========================================
 # 2. NOT MEDITATING
 # ==========================================
 def not_meditating():
-    """Rejects if player is in active meditation."""
+    """
+    Command guard: rejects if player is in active meditation.
+    Usage: @not_meditating()
+    """
     async def predicate(ctx):
         print(f"[DEBUG] checks.not_meditating: Checking user {ctx.author.id}")
         if hasattr(ctx.bot, 'is_meditating') and ctx.author.id in ctx.bot.is_meditating:
@@ -44,11 +69,15 @@ def not_meditating():
         return True
     return commands.check(predicate)
 
+
 # ==========================================
 # 3. MERIDIANS INTACT
 # ==========================================
 def meridians_intact():
-    """Rejects if player has damaged meridians."""
+    """
+    Command guard: rejects if player has damaged meridians.
+    Usage: @meridians_intact()
+    """
     async def predicate(ctx):
         print(f"[DEBUG] checks.meridians_intact: Checking user {ctx.author.id}")
         user = await db_utils.fetch_user(ctx.bot.db, ctx.author.id)
@@ -66,11 +95,15 @@ def meridians_intact():
         return True
     return commands.check(predicate)
 
+
 # ==========================================
 # 4. NOT IN COMBAT
 # ==========================================
 def not_in_combat():
-    """Rejects if player is currently in a hunt (has CombatView open)."""
+    """
+    Command guard: rejects if player is currently in a hunt (has CombatView open).
+    Usage: @not_in_combat()
+    """
     async def predicate(ctx):
         print(f"[DEBUG] checks.not_in_combat: Checking user {ctx.author.id}")
         if hasattr(ctx.bot, 'active_combats') and ctx.author.id in ctx.bot.active_combats:
@@ -79,36 +112,55 @@ def not_in_combat():
         return True
     return commands.check(predicate)
 
+
 # ==========================================
 # 5. COOLDOWN CHECK (from bot_settings)
 # ==========================================
 def cooldown_check(command_name):
-    """Reads cooldown from bot_settings collection instead of hardcoded."""
+    """
+    Reads cooldown from bot_settings collection instead of hardcoded.
+    Usage: @cooldown_check("work")
+    
+    Args:
+        command_name (str): Name of the command (e.g., "work", "hunt")
+    """
     async def predicate(ctx):
         print(f"[DEBUG] checks.cooldown_check: Checking {command_name} for user {ctx.author.id}")
         cooldown_key = f"cooldown_{command_name}"
         seconds = await _get_setting(ctx.bot, cooldown_key, None)
+        
         if seconds is None:
-            return True
+            return True  # No cooldown set, allow command
+            
         if not hasattr(ctx.bot, 'command_cooldowns'):
             ctx.bot.command_cooldowns = {}
+            
         user_key = f"{command_name}_{ctx.author.id}"
         last_used = ctx.bot.command_cooldowns.get(user_key, 0)
         now = datetime.datetime.now().timestamp()
+        
         if now - last_used < seconds:
             remaining = int(seconds - (now - last_used))
             msg = await _get_setting(ctx.bot, "msg_cooldown", config.MSG_COOLDOWN)
             await ctx.send(msg.format(seconds=remaining), ephemeral=True)
             return False
+            
         ctx.bot.command_cooldowns[user_key] = now
         return True
     return commands.check(predicate)
+
 
 # ==========================================
 # 6. HAS ENOUGH KI
 # ==========================================
 def has_enough_ki(amount):
-    """Checks if player has at least 'amount' Ki."""
+    """
+    Checks if player has at least 'amount' Ki.
+    Usage: @has_enough_ki(15)
+    
+    Args:
+        amount (int): Required Ki amount
+    """
     async def predicate(ctx):
         print(f"[DEBUG] checks.has_enough_ki: Need {amount} for user {ctx.author.id}")
         user = await db_utils.fetch_user(ctx.bot.db, ctx.author.id)
@@ -124,11 +176,18 @@ def has_enough_ki(amount):
         return True
     return commands.check(predicate)
 
+
 # ==========================================
 # 7. HAS ENOUGH VITALITY
 # ==========================================
 def has_enough_vitality(amount):
-    """Checks if player has at least 'amount' Vitality."""
+    """
+    Checks if player has at least 'amount' Vitality.
+    Usage: @has_enough_vitality(10)
+    
+    Args:
+        amount (int): Required Vitality amount
+    """
     async def predicate(ctx):
         print(f"[DEBUG] checks.has_enough_vitality: Need {amount} for user {ctx.author.id}")
         user = await db_utils.fetch_user(ctx.bot.db, ctx.author.id)
@@ -144,11 +203,18 @@ def has_enough_vitality(amount):
         return True
     return commands.check(predicate)
 
+
 # ==========================================
 # 8. MINIMUM RANK
 # ==========================================
 def min_rank(required_rank):
-    """Checks if player's rank is at least the required rank."""
+    """
+    Checks if player's rank is at least the required rank.
+    Usage: @min_rank("Third-Rate Warrior")
+    
+    Args:
+        required_rank (str): Minimum rank required
+    """
     rank_order = [
         "The Bound (Mortal)",
         "Third-Rate Warrior",
@@ -156,6 +222,7 @@ def min_rank(required_rank):
         "First-Rate Warrior",
         "Peak Master"
     ]
+    
     async def predicate(ctx):
         print(f"[DEBUG] checks.min_rank: Need {required_rank} for user {ctx.author.id}")
         user = await db_utils.fetch_user(ctx.bot.db, ctx.author.id)
@@ -170,11 +237,15 @@ def min_rank(required_rank):
         return True
     return commands.check(predicate)
 
+
 # ==========================================
 # 9. NOT BANNED
 # ==========================================
 def not_banned():
-    """Checks if user is not in the banned_users collection."""
+    """
+    Checks if user is not in the banned_users collection.
+    Usage: @not_banned()
+    """
     async def predicate(ctx):
         print(f"[DEBUG] checks.not_banned: Checking user {ctx.author.id}")
         if await db_utils.is_user_banned(ctx.bot.db, ctx.author.id):
@@ -183,11 +254,19 @@ def not_banned():
         return True
     return commands.check(predicate)
 
+
 # ==========================================
 # 10. PER-USER COOLDOWN (database backed, survives restart)
 # ==========================================
 def cooldown_per_user(command_name, seconds):
-    """Per-user cooldown stored in database (survives bot restart)."""
+    """
+    Per-user cooldown stored in database (survives bot restart).
+    Usage: @cooldown_per_user("spar", 60)
+    
+    Args:
+        command_name (str): Name of the command
+        seconds (int): Cooldown duration in seconds
+    """
     async def predicate(ctx):
         print(f"[DEBUG] checks.cooldown_per_user: Checking {command_name} for user {ctx.author.id}")
         user_key = f"{command_name}_{ctx.author.id}"
@@ -208,5 +287,6 @@ def cooldown_per_user(command_name, seconds):
         await ctx.bot.db.set_user_cooldown(user_key)
         return True
     return commands.check(predicate)
+
 
 print("[DEBUG] checks.py: Command guards loaded successfully")

@@ -1,72 +1,67 @@
+"""
+commands/actions.py - Command logic for Actions cog
+Contains all command implementations (work, observe, comprehend).
+Embed designs are imported from embeds.actions_embeds.
+"""
+
 import discord
 from discord.ext import commands
 from discord import app_commands
 import random
 import datetime
-from utils.helpers import get_max_stats, format_embed_color, roll_random_event, calculate_stage_from_ki
-from utils.db import get_bot_setting, get_user_stat, update_user_stat, is_user_banned
+from backend.helpers import get_max_stats, roll_random_event, calculate_stage_from_ki
+from backend.db import get_bot_setting, get_user_stat, update_user_stat, is_user_banned
+from embeds.actions_embeds import (
+    WORK_FLAVORS,
+    OBSERVE_FLAVORS,
+    work_embed,
+    observe_embed,
+    comprehend_embed,
+    choice_event_embed,
+    event_outcome_embed,
+    cooldown_embed
+)
 import config
 
-print("[DEBUG] actions.py: Loading Actions cog...")
+print("[DEBUG] commands/actions.py: Loading Actions commands...")
+
+
+class ChoiceEventView(discord.ui.View):
+    """View for choice-based random events."""
+    
+    def __init__(self, ctx, event_data):
+        super().__init__(timeout=90)
+        self.ctx = ctx
+        self.event_data = event_data
+        self.choices = event_data["choices"]
+
+        for key, choice in self.choices.items():
+            button = discord.ui.Button(
+                label=choice["text"],
+                style=discord.ButtonStyle.primary if key == "A" else discord.ButtonStyle.secondary,
+                custom_id=key
+            )
+            button.callback = self.make_callback(key)
+            self.add_item(button)
+
+    def make_callback(self, key):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.ctx.author.id:
+                return await interaction.response.send_message(
+                    "❌ This event is not for you.", 
+                    ephemeral=True
+                )
+            result = self.choices[key]["result"]
+            embed = event_outcome_embed(result)
+            await interaction.response.edit_message(embed=embed, view=None)
+            self.stop()
+        return callback
+
 
 class Actions(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         print("[DEBUG] Actions cog initialized")
-
-        # ==========================================
-        # WORK FLAVOR TEXTS
-        # ==========================================
-        self.work_flavors = [
-            "You spent the day transporting heavy iron ore through muddy mountain roads.",
-            "You guarded a merchant caravan traveling between remote villages.",
-            "You helped repair damaged homes after a fierce storm swept through the region.",
-            "You carried water and supplies for wandering martial artists.",
-            "You gathered medicinal herbs near the forest outskirts.",
-            "You assisted blacksmiths in forging crude weapons for local guards.",
-            "You chopped firewood beside a freezing mountain settlement.",
-            "You helped merchants unload expensive cargo beneath careful supervision.",
-        ]
-
-        # ==========================================
-        # OBSERVE FLAVOR TEXTS
-        # ==========================================
-        self.observe_flavors = [
-            "You sat beneath a silent tree and listened to the rhythm of your breathing.",
-            "You observed flowing water and felt your thoughts gradually settle.",
-            "You meditated quietly as cold mountain winds brushed past your robes.",
-            "You watched the rain strike ancient stone paths deep in thought.",
-            "You focused on the circulation of Ki flowing within your body.",
-            "You studied the movements of distant martial practitioners from afar.",
-            "You sat in silence beneath the moon, calming your restless mind.",
-            "You listened carefully to the natural flow of the world around you.",
-        ]
-
-    # ==========================================
-    # HELPER: Check if a milestone reward is already claimed
-    # ==========================================
-    async def _has_milestone(self, user_id, technique, milestone):
-        flags = await get_user_stat(self.bot.db, user_id, "mastery_flags")
-        if not flags:
-            return False
-        return f"{technique}:{milestone}" in flags.split(",")
-
-    async def _add_milestone(self, user_id, technique, milestone):
-        flags = await get_user_stat(self.bot.db, user_id, "mastery_flags") or ""
-        if flags:
-            new_flags = f"{flags},{technique}:{milestone}"
-        else:
-            new_flags = f"{technique}:{milestone}"
-        await update_user_stat(self.bot.db, user_id, "mastery_flags", new_flags)
-
-    async def _get_teaching_bonus(self, user_id, bonus_type):
-        return await get_user_stat(self.bot.db, user_id, f"teaching_bonus_{bonus_type}") or 0
-
-    async def _add_teaching_bonus(self, user_id, bonus_type, amount=1):
-        current = await self._get_teaching_bonus(user_id, bonus_type)
-        new = min(10, current + amount)
-        await update_user_stat(self.bot.db, user_id, f"teaching_bonus_{bonus_type}", new)
-        return new
 
     # ==========================================
     # HELPER: Check feature toggle
@@ -74,7 +69,10 @@ class Actions(commands.Cog):
     async def _actions_enabled(self, ctx):
         enabled = await get_bot_setting(self.bot.db, "toggle_actions", True)
         if not enabled:
-            await ctx.send(config.MSG_FEATURE_DISABLED.format(feature="Actions"), ephemeral=True)
+            await ctx.send(
+                config.MSG_FEATURE_DISABLED.format(feature="Actions"), 
+                ephemeral=True
+            )
         return enabled
 
     # ==========================================
@@ -104,6 +102,20 @@ class Actions(commands.Cog):
     # ==========================================
     # HELPER: Process mastery milestone rewards
     # ==========================================
+    async def _has_milestone(self, user_id, technique, milestone):
+        flags = await get_user_stat(self.bot.db, user_id, "mastery_flags")
+        if not flags:
+            return False
+        return f"{technique}:{milestone}" in flags.split(",")
+
+    async def _add_milestone(self, user_id, technique, milestone):
+        flags = await get_user_stat(self.bot.db, user_id, "mastery_flags") or ""
+        if flags:
+            new_flags = f"{flags},{technique}:{milestone}"
+        else:
+            new_flags = f"{technique}:{milestone}"
+        await update_user_stat(self.bot.db, user_id, "mastery_flags", new_flags)
+
     async def _process_mastery_milestones(self, ctx, user_id, technique, old_mastery, new_mastery):
         if technique == "None":
             return ""
@@ -156,38 +168,8 @@ class Actions(commands.Cog):
         return "\n".join(rewards)
 
     # ==========================================
-    # RANDOM CHOICE EVENT (IMPROVED)
+    # HELPER: Random choice event
     # ==========================================
-    class ChoiceEventView(discord.ui.View):
-        def __init__(self, ctx, event_data):
-            super().__init__(timeout=90)
-            self.ctx = ctx
-            self.event_data = event_data
-            self.choices = event_data["choices"]
-
-            for key, choice in self.choices.items():
-                button = discord.ui.Button(
-                    label=choice["text"],
-                    style=discord.ButtonStyle.primary if key == "A" else discord.ButtonStyle.secondary,
-                    custom_id=key
-                )
-                button.callback = self.make_callback(key)
-                self.add_item(button)
-
-        def make_callback(self, key):
-            async def callback(interaction: discord.Interaction):
-                if interaction.user.id != self.ctx.author.id:
-                    return await interaction.response.send_message("❌ This event is not for you.", ephemeral=True)
-                result = self.choices[key]["result"]
-                embed = discord.Embed(
-                    title="✨ Event Outcome",
-                    description=result,
-                    color=format_embed_color("gold")
-                )
-                await interaction.response.edit_message(embed=embed, view=None)
-                self.stop()
-            return callback
-
     async def _maybe_choice_event(self, ctx):
         if random.random() > 0.05:
             return None
@@ -236,7 +218,6 @@ class Actions(commands.Cog):
         user_id = ctx.author.id
         db = self.bot.db
 
-        # Fetch user data using MongoDB wrapper
         user = await db.fetch_user(user_id)
         if not user:
             return await ctx.send(config.MSG_NOT_REGISTERED, ephemeral=True)
@@ -283,8 +264,8 @@ class Actions(commands.Cog):
 
         choice_event = await self._maybe_choice_event(ctx)
         if choice_event:
-            embed = discord.Embed(title=choice_event["title"], description=choice_event["description"], color=format_embed_color("gold"))
-            view = self.ChoiceEventView(ctx, choice_event)
+            embed = choice_event_embed(choice_event["title"], choice_event["description"])
+            view = ChoiceEventView(ctx, choice_event)
             await ctx.send(embed=embed, view=view)
             return
 
@@ -315,49 +296,39 @@ class Actions(commands.Cog):
                 new_cm = user.get("combat_mastery", 0) + event_effects["combat_mastery"]
                 update_data["combat_mastery"] = new_cm
                 event_changes.append(f"⚔️ {event_effects['combat_mastery']:+} Combat Mastery")
-            
+
             if update_data:
                 await db.update_user(user_id, update_data)
 
-        # Update user data
         await db.update_user(user_id, {
             "vitality": new_vit,
             "taels": new_taels,
             "mastery": new_mastery
         })
 
-        # Update stage based on new Ki
         new_ki = await get_user_stat(self.bot.db, user_id, "ki") or 0
         await self._update_stage(user_id, rank, new_ki)
 
         milestone_msg = await self._process_mastery_milestones(ctx, user_id, tech, mastery, new_mastery)
 
-        embed = discord.Embed(
-            title="⚒️ Murim Labor",
-            color=format_embed_color("main"),
-            description=random.choice(self.work_flavors)
+        embed = work_embed(
+            flavor_text=random.choice(WORK_FLAVORS),
+            mastery_msg=mastery_msg,
+            event_text=event_text,
+            event_changes=event_changes,
+            milestone_msg=milestone_msg,
+            final_taels_gain=final_taels_gain,
+            new_vit=new_vit,
+            max_vit=max_vit,
+            mastery_gain=mastery_gain,
+            new_mastery=new_mastery,
+            daily_bonus=daily_bonus,
+            new_taels=new_taels
         )
-
-        if mastery_msg:
-            embed.description += mastery_msg
-        if event_text:
-            embed.description += f"\n\n🌿 {event_text}"
-            if event_changes:
-                embed.description += f"\n*{', '.join(event_changes)}*"
-        if milestone_msg:
-            embed.description += f"\n\n🏆 **Milestone Reached!**\n{milestone_msg}"
-
-        bonus_text = " **(Daily Bonus Active!)**" if daily_bonus else ""
-        embed.add_field(name="Earned", value=f"💰 **+{final_taels_gain}** Taels{bonus_text}", inline=True)
-        embed.add_field(name="Vitality", value=f"❤️ **{new_vit}**/{max_vit}", inline=True)
-        if mastery_gain > 0:
-            embed.add_field(name="Mastery", value=f"📖 **+{mastery_gain}%** (Total: {new_mastery:.1f}%)", inline=True)
-
-        embed.set_footer(text=f"Current Wealth: {new_taels} Taels")
         await ctx.send(embed=embed)
 
     # ==========================================
-    # HYBRID COMMAND:  OBSERVE
+    # HYBRID COMMAND: OBSERVE
     # ==========================================
     @commands.hybrid_command(name="observe", description="Observe the world and refine your Ki.")
     @app_commands.checks.cooldown(1, 5.0)
@@ -416,8 +387,8 @@ class Actions(commands.Cog):
 
         choice_event = await self._maybe_choice_event(ctx)
         if choice_event:
-            embed = discord.Embed(title=choice_event["title"], description=choice_event["description"], color=format_embed_color("gold"))
-            view = self.ChoiceEventView(ctx, choice_event)
+            embed = choice_event_embed(choice_event["title"], choice_event["description"])
+            view = ChoiceEventView(ctx, choice_event)
             await ctx.send(embed=embed, view=view)
             return
 
@@ -450,28 +421,21 @@ class Actions(commands.Cog):
 
         milestone_msg = await self._process_mastery_milestones(ctx, user_id, tech, mastery, new_mastery)
 
-        embed = discord.Embed(
-            title="👁️ Observation",
-            color=format_embed_color("teal"),
-            description=random.choice(self.observe_flavors)
+        embed = observe_embed(
+            flavor_text=random.choice(OBSERVE_FLAVORS),
+            mastery_msg=mastery_msg,
+            event_text=event_text,
+            event_changes=event_changes,
+            milestone_msg=milestone_msg,
+            ki_gain=ki_gain,
+            new_vit=new_vit,
+            max_vit=max_vit,
+            mastery_gain=mastery_gain,
+            new_mastery=new_mastery,
+            daily_bonus=daily_bonus,
+            new_ki=new_ki,
+            ki_cap=ki_cap
         )
-
-        if mastery_msg:
-            embed.description += mastery_msg
-        if event_text:
-            embed.description += f"\n\n🌿 {event_text}"
-            if event_changes:
-                embed.description += f"\n*{', '.join(event_changes)}*"
-        if milestone_msg:
-            embed.description += f"\n\n🏆 **Milestone Reached!**\n{milestone_msg}"
-
-        bonus_text = " **(Daily Bonus Active!)**" if daily_bonus else ""
-        embed.add_field(name="Ki Refined", value=f"✨ **+{ki_gain}** Ki{bonus_text}", inline=True)
-        embed.add_field(name="Vitality", value=f"❤️ **{new_vit}**/{max_vit}", inline=True)
-        if mastery_gain > 0:
-            embed.add_field(name="Mastery", value=f"📖 **+{mastery_gain}%** (Total: {new_mastery:.1f}%)", inline=True)
-
-        embed.set_footer(text=f"Current Ki: {new_ki}/{ki_cap}")
         await ctx.send(embed=embed)
 
     # ==========================================
@@ -513,7 +477,7 @@ class Actions(commands.Cog):
                 elapsed = (datetime.datetime.now() - last_used).total_seconds()
                 if elapsed < 1800:
                     remaining = int(1800 - elapsed)
-                    await ctx.send(f"⏳ You need to wait **{remaining} seconds** before using comprehend again.", ephemeral=True)
+                    await ctx.send(embed=cooldown_embed(remaining), ephemeral=True)
                     return
         else:
             self.bot.command_cooldowns = {}
@@ -533,8 +497,8 @@ class Actions(commands.Cog):
 
         choice_event = await self._maybe_choice_event(ctx)
         if choice_event:
-            embed = discord.Embed(title=choice_event["title"], description=choice_event["description"], color=format_embed_color("gold"))
-            view = self.ChoiceEventView(ctx, choice_event)
+            embed = choice_event_embed(choice_event["title"], choice_event["description"])
+            view = ChoiceEventView(ctx, choice_event)
             await ctx.send(embed=embed, view=view)
             return
 
@@ -554,27 +518,16 @@ class Actions(commands.Cog):
 
         milestone_msg = await self._process_mastery_milestones(ctx, user_id, tech, mastery, new_mastery)
 
-        embed = discord.Embed(
-            title="🧠 Martial Comprehension",
-            color=format_embed_color("gold")
+        embed = comprehend_embed(
+            tech_name=tech,
+            event_text=event_text,
+            event_changes=event_changes,
+            milestone_msg=milestone_msg,
+            actual_gain=actual_gain,
+            new_mastery=new_mastery,
+            new_vit=new_vit,
+            max_vit=max_vit
         )
-        embed.description = (
-            f"You isolated yourself from worldly distractions and focused entirely "
-            f"on the principles of **{tech}**.\n\n"
-            f"Fragments of understanding slowly surfaced within your mind."
-        )
-
-        if event_text:
-            embed.description += f"\n\n🌿 {event_text}"
-            if event_changes:
-                embed.description += f"\n*{', '.join(event_changes)}*"
-        if milestone_msg:
-            embed.description += f"\n\n🏆 **Milestone Reached!**\n{milestone_msg}"
-
-        embed.add_field(name="Mastery Gained", value=f"📖 **+{actual_gain}%**", inline=True)
-        embed.add_field(name="Total Mastery", value=f"📊 **{new_mastery:.1f}%** / 100%", inline=True)
-        embed.set_footer(text=f"Vitality Remaining: {new_vit}/{max_vit}")
-
         await ctx.send(embed=embed)
 
     # ==========================================
@@ -590,6 +543,7 @@ class Actions(commands.Cog):
                 ephemeral=True
             )
 
+
 async def setup(bot):
     await bot.add_cog(Actions(bot))
-    print("[DEBUG] actions.py: Setup complete")
+    print("[DEBUG] commands/actions.py: Setup complete")
