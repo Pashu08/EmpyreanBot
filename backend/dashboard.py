@@ -5,7 +5,7 @@ Provides a web interface for monitoring bot status.
 This file contains:
 - DashboardServer class (aiohttp web server)
 - HTML/CSS for the dashboard interface
-- Real-time bot statistics (users, cogs, uptime, etc.)
+- Real-time bot statistics (users, modules, uptime, etc.)
 """
 
 import discord
@@ -13,7 +13,7 @@ from aiohttp import web
 import datetime
 import os
 import config
-from utils.helpers import format_embed_color
+from backend.helpers import format_embed_color
 
 print("[DEBUG] dashboard.py: Loading Dashboard server...")
 
@@ -23,11 +23,11 @@ class DashboardServer:
     Web dashboard server that displays bot statistics.
     Accessible via http://localhost:8080 (or your server's IP).
     """
-    
+
     def __init__(self, bot):
         """
         Initialize the dashboard server.
-        
+
         Args:
             bot: The MurimBot instance
         """
@@ -41,7 +41,7 @@ class DashboardServer:
     def set_last_error(self, error):
         """
         Store the most recent error for display on the dashboard.
-        
+
         Args:
             error (str): Error message (truncated to 500 chars)
         """
@@ -50,11 +50,11 @@ class DashboardServer:
     async def get_top_players(self, sort_by="ki", limit=10):
         """
         Get top players sorted by a specific stat.
-        
+
         Args:
             sort_by (str): Field to sort by (ki, taels, etc.)
             limit (int): Number of players to return
-            
+
         Returns:
             list: List of player documents
         """
@@ -63,7 +63,7 @@ class DashboardServer:
         try:
             cursor = self.bot.db.users.find().sort(sort_by, -1).limit(limit)
             return await cursor.to_list(length=limit)
-        except:
+        except Exception:
             return []
 
     async def get_server_count(self):
@@ -76,16 +76,16 @@ class DashboardServer:
             return 0
         try:
             return await self.bot.db.users.count_documents({})
-        except:
+        except Exception:
             return 0
 
     async def get_admin_logs(self, limit=10):
         """
         Get recent admin actions from the database.
-        
+
         Args:
             limit (int): Number of logs to return
-            
+
         Returns:
             list: List of admin log documents
         """
@@ -93,7 +93,7 @@ class DashboardServer:
             return []
         try:
             return await self.bot.db.get_admin_logs(limit)
-        except:
+        except Exception:
             return []
 
     async def get_command_stats(self):
@@ -110,14 +110,32 @@ class DashboardServer:
             {"name": "!breakthrough", "count": 89},
         ]
 
+    async def get_loaded_modules_count(self):
+        """
+        Get the number of loaded command modules from ./commands folder.
+        
+        Returns:
+            int: Number of loaded command files
+        """
+        try:
+            if os.path.exists('./commands'):
+                count = 0
+                for filename in os.listdir('./commands'):
+                    if filename.endswith('.py') and filename != '__init__.py':
+                        count += 1
+                return count
+        except Exception:
+            pass
+        return len(self.bot.cogs) if self.bot.cogs else 0
+
     def _generate_top_players_html(self, players, stat="ki"):
         """
         Generate HTML table rows for top players.
-        
+
         Args:
             players (list): List of player documents
             stat (str): Stat being displayed (ki or taels)
-            
+
         Returns:
             str: HTML table rows
         """
@@ -125,7 +143,8 @@ class DashboardServer:
             return "<tr><td colspan='4'>No data available</td></tr>"
         rows = []
         for i, player in enumerate(players, 1):
-            name = f"<@{player.get('user_id', 0)}>" if player.get('user_id') else "Unknown"
+            user_id = player.get('user_id', 0)
+            name = f"<@{user_id}>" if user_id else "Unknown"
             value = player.get(stat, 0)
             realm = player.get('rank', 'Unknown')[:20]
             rows.append(f"<tr><td>{i}</td><td>{name}</td><td>{value}</td><td>{realm}</td></tr>")
@@ -134,10 +153,10 @@ class DashboardServer:
     def _generate_command_stats_html(self, stats):
         """
         Generate HTML table rows for command statistics.
-        
+
         Args:
             stats (list): List of command stat dictionaries
-            
+
         Returns:
             str: HTML table rows
         """
@@ -151,10 +170,10 @@ class DashboardServer:
     def _generate_admin_logs_html(self, logs):
         """
         Generate HTML for recent admin actions.
-        
+
         Args:
             logs (list): List of admin log documents
-            
+
         Returns:
             str: HTML div content
         """
@@ -163,8 +182,10 @@ class DashboardServer:
         items = []
         for log in logs:
             action = log.get('action', 'Unknown')
-            admin = f"<@{log.get('admin_id', 0)}>" if log.get('admin_id') else "Unknown"
-            target = f"<@{log.get('target_id', 0)}>" if log.get('target_id') else ""
+            admin_id = log.get('admin_id', 0)
+            admin = f"<@{admin_id}>" if admin_id else "Unknown"
+            target_id = log.get('target_id', 0)
+            target = f"<@{target_id}>" if target_id else ""
             time_str = log.get('timestamp', '')[:16]
             items.append(
                 f"<div style='margin-bottom: 5px; font-size: 0.8rem;'>"
@@ -178,10 +199,10 @@ class DashboardServer:
         """
         Handle requests to the dashboard root URL.
         Renders the HTML dashboard with current bot statistics.
-        
+
         Args:
             request: aiohttp request object
-            
+
         Returns:
             web.Response: HTML page
         """
@@ -192,6 +213,7 @@ class DashboardServer:
         top_taels_players = await self.get_top_players("taels", 5)
         command_stats = await self.get_command_stats()
         admin_logs = await self.get_admin_logs(5)
+        loaded_modules = await self.get_loaded_modules_count()
 
         cog_count = len(self.bot.cogs)
         cog_names = list(self.bot.cogs.keys())
@@ -258,7 +280,8 @@ class DashboardServer:
                         <div class="stat-value status-online">ONLINE</div>
                         <div class="stat-label">Status</div>
                         <hr style="margin: 10px 0; border-color: rgba(255,255,255,0.1);">
-                        <div>📦 Cogs Loaded: <strong>{cog_count}</strong> / {len(os.listdir('./cogs')) if os.path.exists('./cogs') else 0}</div>
+                        <div>📦 Commands Loaded: <strong>{loaded_modules}</strong></div>
+                        <div>🔧 Cogs Loaded: <strong>{cog_count}</strong></div>
                         <div>⏱️ Uptime: <strong>{uptime_str}</strong></div>
                         <div>🌐 Servers: <strong>{server_count}</strong></div>
                         <div>👥 Registered Users: <strong>{user_count}</strong></div>
@@ -344,12 +367,13 @@ class DashboardServer:
             s.close()
             print(f"[DEBUG] Web dashboard: http://localhost:{config.WEB_DASHBOARD_PORT}")
             print(f"[DEBUG] Web dashboard: http://{local_ip}:{config.WEB_DASHBOARD_PORT}")
-        except:
+        except Exception:
             print(f"[DEBUG] Web dashboard: http://localhost:{config.WEB_DASHBOARD_PORT}")
 
     async def stop(self):
         """Stop the web server gracefully."""
         if self.runner:
             await self.runner.cleanup()
+
 
 print("[DEBUG] dashboard.py: Dashboard server loaded successfully")
