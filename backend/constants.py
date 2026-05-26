@@ -88,6 +88,13 @@ RECOVER_DURATION_SECONDS = 60
 RECOVER_COOLDOWN_MINUTES = 5
 
 # ==========================================
+# CANCEL PENALTY VALUES
+# ==========================================
+
+CANCEL_PENALTY_THRESHOLD_SECONDS = 30
+CANCEL_PENALTY_MINUTES = 2
+
+# ==========================================
 # FOCUS COMMAND VALUES
 # ==========================================
 
@@ -127,37 +134,98 @@ ENEMIES = {
 }
 
 # ==========================================
-# TECHNIQUES
+# TECHNIQUES (EXPANDED)
 # ==========================================
 
 TECHNIQUES = {
+    # ========== COMMON TECHNIQUES (No Rank Requirement) ==========
+    
     "Flowing Cloud Steps": {
-        "description": "Focus: Evasion & Agility",
+        "type": "Movement",
+        "family": "Unorthodox",
+        "rank_required": "The Bound (Mortal)",
         "emoji": "💨",
-        "story": "The ink drifts like mist. A master walks through rain without a drop touching his robes.",
+        "description": "Focus: Evasion & Agility",
         "effect_text": "Increases **Dodge Chance by 15%**.",
         "combat_effect": "dodge_boost",
+        "story": "The ink drifts like mist. A master walks through rain without a drop touching his robes.",
+        "color": 0x9B59B6,  # Purple for Unorthodox
     },
+    
     "Swift Wind Kick": {
-        "description": "Focus: Speed & Multi-hit",
+        "type": "Strike",
+        "family": "Unorthodox",
+        "rank_required": "The Bound (Mortal)",
         "emoji": "🦶",
-        "story": "The paper is warm. A warrior's legs move so fast they create vacuum blades.",
+        "description": "Focus: Speed & Multi-hit",
         "effect_text": "Chance to **strike twice** in one turn.",
         "combat_effect": "double_strike",
+        "story": "The paper is warm. A warrior's legs move so fast they create vacuum blades.",
+        "color": 0x9B59B6,  # Purple for Unorthodox
     },
+    
     "Golden Bell Shield": {
-        "description": "Focus: Damage Reduction",
+        "type": "Defense",
+        "family": "Orthodox",
+        "rank_required": "The Bound (Mortal)",
         "emoji": "🔔",
-        "story": "Heavy, bound in iron. The art of hardening Ki into an invisible bell of protection.",
+        "description": "Focus: Damage Reduction",
         "effect_text": "Reduces **incoming damage by 20%**.",
         "combat_effect": "damage_reduction",
+        "story": "Heavy, bound in iron. The art of hardening Ki into an invisible bell of protection.",
+        "color": 0x43B581,  # Green for Orthodox
     },
+    
     "Vajra Guard Mantra": {
-        "description": "Focus: Vitality Regeneration",
+        "type": "Recovery",
+        "family": "Orthodox",
+        "rank_required": "The Bound (Mortal)",
         "emoji": "🧘",
-        "story": "A soothing light radiates. Breathing in rhythm with the heavens heals wounds.",
+        "description": "Focus: Vitality Regeneration",
         "effect_text": "Restores **5% HP every turn** during combat.",
         "combat_effect": "hp_regen",
+        "story": "A soothing light radiates. Breathing in rhythm with the heavens heals wounds.",
+        "color": 0x43B581,  # Green for Orthodox
+    },
+    
+    # ========== RARE TECHNIQUES (Third-Rate Warrior Required) ==========
+    
+    "Iron Cloth Skill": {
+        "type": "Defense",
+        "family": "Orthodox",
+        "rank_required": "Third-Rate Warrior",
+        "emoji": "🛡️",
+        "description": "Focus: Body Hardening",
+        "effect_text": "Reduces **incoming damage by 10%** and increases **Max HP by 5%**.",
+        "combat_effect": "iron_body",
+        "story": "Monks of Shaolin train until their skin becomes like forged iron. A single punch sounds like striking a bell.",
+        "color": 0x43B581,  # Green for Orthodox
+    },
+    
+    "Lightness Skill": {
+        "type": "Movement",
+        "family": "Unorthodox",
+        "rank_required": "Third-Rate Warrior",
+        "emoji": "🍃",
+        "description": "Focus: Weightlessness",
+        "effect_text": "**Guaranteed dodge** on the first turn of combat.",
+        "combat_effect": "first_turn_dodge",
+        "story": "A master leaps across treetops without disturbing a single leaf. The art of making oneself light as a feather.",
+        "color": 0x9B59B6,  # Purple for Unorthodox
+    },
+    
+    # ========== EPIC TECHNIQUE (Second-Rate Warrior Required) ==========
+    
+    "Blood Rebirth": {
+        "type": "Healing",
+        "family": "Demonic",
+        "rank_required": "Second-Rate Warrior",
+        "emoji": "🩸",
+        "description": "Focus: Forbidden Life Exchange",
+        "effect_text": "Sacrifice **10% of current HP** to heal **30% of max HP**.",
+        "combat_effect": "blood_rebirth",
+        "story": "A forbidden art from the demonic cults. Trade blood for vitality, but the heavens look away in disgust.",
+        "color": 0xE74C3C,  # Red for Demonic
     },
 }
 
@@ -344,7 +412,7 @@ FACTIONS = {
 # ==========================================
 
 HIDDEN_TECHNIQUES = {
-    # Example structure – add your own hidden techniques here later
+    # Future expansion - techniques that unlock after mastering others
     # "Flowing Cloud Shadow Step": {
     #     "required_techniques": ["Flowing Cloud Steps", "Swift Wind Kick"],
     #     "description": "Teleport behind an enemy. Guaranteed critical hit.",
@@ -353,7 +421,7 @@ HIDDEN_TECHNIQUES = {
 }
 
 # ==========================================
-# VALIDATION SETS (ADDED for helpers.py)
+# VALIDATION SETS
 # ==========================================
 
 VALID_RANKS = set(RANKS)
