@@ -207,7 +207,7 @@ class Help(commands.Cog):
     @commands.hybrid_command(
         name="help",
         description="The complete manual for Empyrean Ascent.",
-        aliases=["h", "commands", "manual"]
+        aliases=["commands", "manual"]
     )
     async def help(self, ctx: commands.Context, *, command: Optional[str] = None):
         """
