@@ -8,7 +8,7 @@ This file handles:
 - Web dashboard (via backend.dashboard)
 - Command loading from ./commands folder
 - Graceful shutdown with shutdown source tracking
-- Channel blocking for blacklisted channels
+- Channel blocking for blacklisted channels (prefix + slash commands)
 """
 
 import discord
@@ -80,7 +80,7 @@ class MurimBot(commands.Bot):
 
     async def on_message(self, message):
         """
-        Handle messages and block commands in blacklisted channels.
+        Handle messages and block prefix commands in blacklisted channels.
         """
         # Ignore bot messages
         if message.author.bot:
@@ -92,6 +92,20 @@ class MurimBot(commands.Bot):
         
         # Process commands normally
         await self.process_commands(message)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """
+        Global check for slash commands.
+        Blocks interactions in blacklisted channels.
+        """
+        # Check if channel is blocked
+        if interaction.channel_id in self.blocked_channels:
+            await interaction.response.send_message(
+                "❌ This channel is blocked from using bot commands.",
+                ephemeral=True
+            )
+            return False
+        return True
 
     async def setup_hook(self):
         """
