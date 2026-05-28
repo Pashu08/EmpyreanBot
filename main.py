@@ -81,9 +81,15 @@ class MurimBot(commands.Bot):
     async def on_message(self, message):
         """
         Handle messages and block prefix commands in blacklisted channels.
+        Always allows block/unblock commands to work even in blocked channels.
         """
         # Ignore bot messages
         if message.author.bot:
+            return
+        
+        # Always allow block/unblock commands (they start with !block, !unblock, etc.)
+        if message.content.startswith(('!block', '!unblock', '!listblocks', '!blocked')):
+            await self.process_commands(message)
             return
         
         # Check if channel is blocked
@@ -97,7 +103,12 @@ class MurimBot(commands.Bot):
         """
         Global check for slash commands.
         Blocks interactions in blacklisted channels.
+        Always allows block/unblock commands to work.
         """
+        # Always allow block/unblock commands
+        if interaction.command.name in ['block', 'unblock', 'listblocks']:
+            return True
+        
         # Check if channel is blocked
         if interaction.channel_id in self.blocked_channels:
             await interaction.response.send_message(
