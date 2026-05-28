@@ -8,6 +8,7 @@ This file handles:
 - Web dashboard (via backend.dashboard)
 - Command loading from ./commands folder
 - Graceful shutdown with shutdown source tracking
+- Channel blocking for blacklisted channels
 """
 
 import discord
@@ -36,7 +37,6 @@ intents.message_content = True   # Allows bot to read message content
 intents.members = True           # Allows bot to track member join/leave events
 print("[DEBUG] main.py: Intents configured")
 
-
 # ==========================================
 # MAIN BOT CLASS
 # ==========================================
@@ -44,31 +44,32 @@ class MurimBot(commands.Bot):
     """
     Main bot class. Handles database connection, command loading, and shutdown.
     """
-    
+
     def __init__(self):
         """Initialize the bot with configuration and empty state."""
         print("[DEBUG] MurimBot.__init__: Started")
-        
+
         # Store configuration reference
         self.config = config
-        
+
         # Database wrapper (will be initialized in setup_hook)
         self.db = None
-        
+
         # Startup tracking
         self.startup_time = time.time()
-        
+
         # Web dashboard server
         self.dashboard = None
-        
+
         # Shutdown tracking
         self._shutdown_handled = False
         self.shutdown_source = None   # Will store why the bot shut down
-        
+
         # Game state tracking (in-memory, not in database)
         self.active_combats = {}       # user_id -> True (currently in a hunt)
         self.command_cooldowns = {}    # user_id -> timestamp (manual cooldowns)
         self.is_meditating = set()     # user_id -> currently meditating
+        self.blocked_channels = set()  # channel_id -> blocked from bot commands
 
         # Initialize the parent Bot class
         super().__init__(
@@ -76,6 +77,21 @@ class MurimBot(commands.Bot):
             intents=intents
         )
         print("[DEBUG] MurimBot.__init__: Finished")
+
+    async def on_message(self, message):
+        """
+        Handle messages and block commands in blacklisted channels.
+        """
+        # Ignore bot messages
+        if message.author.bot:
+            return
+        
+        # Check if channel is blocked
+        if message.channel.id in self.blocked_channels:
+            return  # Silently ignore commands in blocked channels
+        
+        # Process commands normally
+        await self.process_commands(message)
 
     async def setup_hook(self):
         """
@@ -94,7 +110,7 @@ class MurimBot(commands.Bot):
 
         # ========== STEP 2: Connect to MongoDB ==========
         print("📦 Connecting to MongoDB...")
-        
+
         # Get MongoDB connection string from environment variables
         mongodb_uri = os.environ.get("MONGODB_URI")
         mongodb_db_name = os.environ.get("MONGODB_DB_NAME", "Empyrean-ascent")
@@ -170,7 +186,7 @@ class MurimBot(commands.Bot):
         Called when the bot is stopping (Ctrl+C, Render signal, or crash).
         """
         print("[DEBUG] close: Graceful shutdown started")
-        
+
         # Prevent multiple shutdown calls
         if self._shutdown_handled:
             return
@@ -207,7 +223,7 @@ class MurimBot(commands.Bot):
         This is where we announce that the bot is online.
         """
         startup_duration = time.time() - self.startup_time
-        
+
         # Print startup banner
         print("\n--- Murim: Empyrean Ascent is Online ---")
         print(f"Logged in as: {self.user.name}")
@@ -242,7 +258,6 @@ class MurimBot(commands.Bot):
                 print(f"[WARN] Failed to send startup announcement: {e}")
                 log_error_to_file(f"Startup announcement failed: {e}")
 
-
 # ==========================================
 # GRACEFUL SHUTDOWN HANDLER
 # ==========================================
@@ -259,20 +274,19 @@ def signal_handler(signum, frame):
         signal.SIGTERM: "SIGTERM (Render shutdown or system)",
     }
     signal_name = signal_names.get(signum, f"Unknown signal ({signum})")
-    
+
     print(f"\n[DEBUG] Received shutdown signal: {signal_name}")
-    
+
     if bot_instance:
         bot_instance.shutdown_source = signal_name
         asyncio.create_task(bot_instance.close())
-
 
 # ==========================================
 # RUN BOT
 # ==========================================
 if __name__ == "__main__":
     print("[DEBUG] main.py: Starting bot...")
-    
+
     # Create bot instance
     bot_instance = MurimBot()
     bot = bot_instance
