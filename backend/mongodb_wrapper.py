@@ -12,17 +12,16 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 print("[DEBUG] mongodb_wrapper.py: Loading MongoDB wrapper...")
 
-
 class MongoDBWrapper:
     """
     MongoDB wrapper that provides async database methods for the bot.
     All cogs use this class to interact with the database.
     """
-    
+
     def __init__(self, uri, db_name):
         """
         Initialize the MongoDB wrapper with connection details.
-        
+
         Args:
             uri (str): MongoDB Atlas connection string
             db_name (str): Name of the database to use
@@ -41,6 +40,7 @@ class MongoDBWrapper:
         self.inventory = None
         self.admin_logs = None
         self.admins = None
+        self.blocked_channels = None  # NEW: For storing blocked channels
 
     async def connect(self):
         """
@@ -63,6 +63,7 @@ class MongoDBWrapper:
         self.inventory = self.db.inventory
         self.admin_logs = self.db.admin_logs
         self.admins = self.db.admins
+        self.blocked_channels = self.db.blocked_channels  # NEW: Blocked channels collection
 
         # Create indexes for better query performance
         # Each index speeds up specific types of queries
@@ -74,6 +75,7 @@ class MongoDBWrapper:
         await self.inventory.create_index([("user_id", 1), ("item_name", 1)], unique=True)
         await self.admin_logs.create_index([("timestamp", -1)])
         await self.admins.create_index([("user_id", 1)], unique=True)
+        await self.blocked_channels.create_index([("channel_id", 1)], unique=True)  # NEW: Index for blocked_channels
 
         print("[DEBUG] MongoDB connected and indexes created")
         return self
@@ -86,14 +88,14 @@ class MongoDBWrapper:
     # ==========================================
     # USER METHODS
     # ==========================================
-    
+
     async def fetch_user(self, user_id):
         """
         Get a user's complete data document.
-        
+
         Args:
             user_id (int): Discord user ID
-            
+
         Returns:
             dict or None: User document if found, else None
         """
@@ -102,10 +104,10 @@ class MongoDBWrapper:
     async def user_exists(self, user_id):
         """
         Check if a user exists in the database.
-        
+
         Args:
             user_id (int): Discord user ID
-            
+
         Returns:
             bool: True if user exists, False otherwise
         """
@@ -114,7 +116,7 @@ class MongoDBWrapper:
     async def update_user(self, user_id, update_data):
         """
         Update a user's document with new data.
-        
+
         Args:
             user_id (int): Discord user ID
             update_data (dict): Dictionary of fields to update
@@ -128,11 +130,11 @@ class MongoDBWrapper:
     async def get_user_stat(self, user_id, stat_name):
         """
         Get a single statistic from a user's document.
-        
+
         Args:
             user_id (int): Discord user ID
             stat_name (str): Name of the field to retrieve
-            
+
         Returns:
             Any: Value of the field, or None if user not found
         """
@@ -142,7 +144,7 @@ class MongoDBWrapper:
     async def update_user_stat(self, user_id, stat_name, value):
         """
         Update a single statistic in a user's document.
-        
+
         Args:
             user_id (int): Discord user ID
             stat_name (str): Name of the field to update
@@ -157,14 +159,14 @@ class MongoDBWrapper:
     # ==========================================
     # INVENTORY METHODS
     # ==========================================
-    
+
     async def get_inventory(self, user_id):
         """
         Get all items in a user's inventory.
-        
+
         Args:
             user_id (int): Discord user ID
-            
+
         Returns:
             list: List of item documents with name, quantity, bound status
         """
@@ -174,7 +176,7 @@ class MongoDBWrapper:
     async def add_item(self, user_id, item_name, quantity=1, bound=False):
         """
         Add an item to a user's inventory.
-        
+
         Args:
             user_id (int): Discord user ID
             item_name (str): Name of the item
@@ -190,12 +192,12 @@ class MongoDBWrapper:
     async def remove_item(self, user_id, item_name, quantity=1):
         """
         Remove an item from a user's inventory.
-        
+
         Args:
             user_id (int): Discord user ID
             item_name (str): Name of the item
             quantity (int): Number of items to remove
-            
+
         Returns:
             bool: True if successful, False if not enough items
         """
@@ -214,12 +216,12 @@ class MongoDBWrapper:
     async def has_item(self, user_id, item_name, quantity=1):
         """
         Check if a user has at least a certain quantity of an item.
-        
+
         Args:
             user_id (int): Discord user ID
             item_name (str): Name of the item
             quantity (int): Minimum quantity required
-            
+
         Returns:
             bool: True if user has enough, False otherwise
         """
@@ -229,15 +231,15 @@ class MongoDBWrapper:
     # ==========================================
     # BOT SETTINGS METHODS
     # ==========================================
-    
+
     async def get_bot_setting(self, key, default=None):
         """
         Get a bot setting from the bot_settings collection.
-        
+
         Args:
             key (str): Setting key
             default (Any): Default value if setting not found
-            
+
         Returns:
             Any: Setting value (converted to int/bool if applicable)
         """
@@ -256,7 +258,7 @@ class MongoDBWrapper:
     async def set_bot_setting(self, key, value):
         """
         Set a bot setting in the bot_settings collection.
-        
+
         Args:
             key (str): Setting key
             value (Any): Value to store (converted to string)
@@ -270,14 +272,14 @@ class MongoDBWrapper:
     # ==========================================
     # PERMISSION METHODS
     # ==========================================
-    
+
     async def get_user_permissions(self, user_id):
         """
         Get all permission strings for a user.
-        
+
         Args:
             user_id (int): Discord user ID
-            
+
         Returns:
             list: List of permission strings (e.g., "player_manage")
         """
@@ -288,7 +290,7 @@ class MongoDBWrapper:
     async def add_user_permission(self, user_id, permission):
         """
         Grant a permission to a user.
-        
+
         Args:
             user_id (int): Discord user ID
             permission (str): Permission to grant
@@ -302,7 +304,7 @@ class MongoDBWrapper:
     async def remove_user_permission(self, user_id, permission):
         """
         Remove a permission from a user.
-        
+
         Args:
             user_id (int): Discord user ID
             permission (str): Permission to remove
@@ -312,14 +314,14 @@ class MongoDBWrapper:
     # ==========================================
     # BAN METHODS
     # ==========================================
-    
+
     async def is_user_banned(self, user_id):
         """
         Check if a user is banned from the bot.
-        
+
         Args:
             user_id (int): Discord user ID
-            
+
         Returns:
             bool: True if banned, False otherwise
         """
@@ -328,7 +330,7 @@ class MongoDBWrapper:
     async def ban_user(self, user_id, reason, banned_by):
         """
         Ban a user from using the bot.
-        
+
         Args:
             user_id (int): Discord user ID
             reason (str): Reason for the ban
@@ -347,7 +349,7 @@ class MongoDBWrapper:
     async def unban_user(self, user_id):
         """
         Unban a user.
-        
+
         Args:
             user_id (int): Discord user ID
         """
@@ -356,14 +358,14 @@ class MongoDBWrapper:
     # ==========================================
     # COOLDOWN METHODS
     # ==========================================
-    
+
     async def get_user_cooldown(self, cooldown_key):
         """
         Get the last used timestamp for a cooldown key.
-        
+
         Args:
             cooldown_key (str): Unique key for the cooldown
-            
+
         Returns:
             datetime or None: Last used timestamp, or None if not found
         """
@@ -378,7 +380,7 @@ class MongoDBWrapper:
     async def set_user_cooldown(self, cooldown_key):
         """
         Set the current timestamp for a cooldown key.
-        
+
         Args:
             cooldown_key (str): Unique key for the cooldown
         """
@@ -391,11 +393,11 @@ class MongoDBWrapper:
     # ==========================================
     # ADMIN LOG METHODS
     # ==========================================
-    
+
     async def log_admin_action(self, admin_id, action, target_id=None, details=None):
         """
         Log an admin action to the admin_logs collection.
-        
+
         Args:
             admin_id (int): Discord ID of the admin
             action (str): Name of the command/action
@@ -413,10 +415,10 @@ class MongoDBWrapper:
     async def get_admin_logs(self, limit=10):
         """
         Get the most recent admin actions.
-        
+
         Args:
             limit (int): Maximum number of logs to return
-            
+
         Returns:
             list: List of admin log documents
         """
@@ -426,11 +428,11 @@ class MongoDBWrapper:
     # ==========================================
     # LEGACY ADMIN METHODS
     # ==========================================
-    
+
     async def get_admins(self):
         """
         Get all admin user IDs from the admins collection.
-        
+
         Returns:
             list: List of user IDs
         """
@@ -441,7 +443,7 @@ class MongoDBWrapper:
     async def add_admin(self, user_id):
         """
         Add a user to the admins collection.
-        
+
         Args:
             user_id (int): Discord user ID
         """
@@ -454,7 +456,7 @@ class MongoDBWrapper:
     async def remove_admin(self, user_id):
         """
         Remove a user from the admins collection.
-        
+
         Args:
             user_id (int): Discord user ID
         """
@@ -463,7 +465,7 @@ class MongoDBWrapper:
     # ==========================================
     # INITIALIZATION
     # ==========================================
-    
+
     async def initialize_default_settings(self):
         """
         Initialize default bot settings if they don't already exist.

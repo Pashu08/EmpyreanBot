@@ -9,6 +9,7 @@ This file handles:
 - Command loading from ./commands folder
 - Graceful shutdown with shutdown source tracking
 - Channel blocking for blacklisted channels (prefix + slash commands)
+- Loads blocked channels from database on startup
 """
 
 import discord
@@ -69,7 +70,7 @@ class MurimBot(commands.Bot):
         self.active_combats = {}       # user_id -> True (currently in a hunt)
         self.command_cooldowns = {}    # user_id -> timestamp (manual cooldowns)
         self.is_meditating = set()     # user_id -> currently meditating
-        self.blocked_channels = set()  # channel_id -> blocked from bot commands
+        self.blocked_channels = set()  # channel_id -> blocked from bot commands (loaded from DB)
 
         # Initialize the parent Bot class
         super().__init__(
@@ -77,6 +78,25 @@ class MurimBot(commands.Bot):
             intents=intents
         )
         print("[DEBUG] MurimBot.__init__: Finished")
+
+    async def load_blocked_channels(self):
+        """Load blocked channels from database into memory."""
+        if not self.db:
+            return
+        
+        try:
+            # Get all blocked channels from database
+            cursor = self.db.blocked_channels.find({})
+            blocked_list = await cursor.to_list(length=1000)
+            
+            # Clear current memory set and reload from DB
+            self.blocked_channels.clear()
+            for doc in blocked_list:
+                self.blocked_channels.add(doc["channel_id"])
+            
+            print(f"[DEBUG] Loaded {len(self.blocked_channels)} blocked channels from database")
+        except Exception as e:
+            print(f"[WARN] Failed to load blocked channels: {e}")
 
     async def on_message(self, message):
         """
@@ -92,7 +112,7 @@ class MurimBot(commands.Bot):
             await self.process_commands(message)
             return
         
-        # Check if channel is blocked
+        # Check if channel is blocked (from memory, loaded from DB)
         if message.channel.id in self.blocked_channels:
             return  # Silently ignore commands in blocked channels
         
@@ -106,7 +126,7 @@ class MurimBot(commands.Bot):
         Always allows block/unblock commands to work.
         """
         # Always allow block/unblock commands
-        if interaction.command.name in ['block', 'unblock', 'listblocks']:
+        if interaction.command and interaction.command.name in ['block', 'unblock', 'listblocks']:
             return True
         
         # Check if channel is blocked
@@ -155,6 +175,9 @@ class MurimBot(commands.Bot):
 
         print("🔗 MongoDB Connection Established")
         print("[DEBUG] setup_hook: Database connection opened")
+
+        # ========== STEP 2.5: Load blocked channels from database ==========
+        await self.load_blocked_channels()
 
         # ========== STEP 3: Start Web Dashboard ==========
         if config.WEB_DASHBOARD_ENABLED:
@@ -255,6 +278,7 @@ class MurimBot(commands.Bot):
         print(f"Startup took {startup_duration:.2f} seconds")
         print(f"Commands loaded: {len(self.cogs)}")
         print("Status: Database Sync Complete")
+        print(f"🔒 Blocked channels: {len(self.blocked_channels)}")
         print("------------------------------------------")
         print("[DEBUG] on_ready: Bot is fully ready")
 
@@ -272,7 +296,7 @@ class MurimBot(commands.Bot):
                 if channel:
                     embed = discord.Embed(
                         title="🌿 Empyrean Ascent Bot Online",
-                        description=f"Bot started successfully in {startup_duration:.2f}s\nLoaded {len(self.cogs)} commands",
+                        description=f"Bot started successfully in {startup_duration:.2f}s\nLoaded {len(self.cogs)} commands\n🔒 {len(self.blocked_channels)} channels blocked",
                         color=0x00FF00
                     )
                     await channel.send(embed=embed)
