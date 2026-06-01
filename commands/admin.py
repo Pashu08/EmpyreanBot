@@ -23,7 +23,7 @@ from backend.permissions import (
 )
 from backend.settings import get_setting, set_setting
 from backend.constants import PERMANENT_GOD
-from backend.admin_helpers import log_admin_command
+from backend.admin_helpers import log_admin_command, format_inventory_for_admin
 
 # Embed imports
 from embeds.admin_embeds import (
@@ -38,18 +38,19 @@ from embeds.admin_embeds import (
     permissions_view_embed,
     sync_start_embed,
     sync_success_embed,
-    sync_failure_embed
+    sync_failure_embed,
+    inventory_inspect_embed,
+    item_removed_embed
 )
 
 import config
 
 print("[DEBUG] commands/admin.py: Loading Admin commands...")
 
-
 class Admin(commands.Cog):
     """
     Admin cog - Contains all administrator commands.
-    
+
     Permission Levels:
     - Permanent God: Full access to everything (hardcoded user ID)
     - Temporary God: Full access (stored in database, granted via !promote)
@@ -57,7 +58,7 @@ class Admin(commands.Cog):
     - config_manage: Can change bot settings (toggle, set_cooldown, etc.)
     - system: Can use system commands (sync, promote, ban, etc.)
     """
-    
+
     def __init__(self, bot):
         self.bot = bot
         print("[DEBUG] Admin cog initialized")
@@ -65,15 +66,15 @@ class Admin(commands.Cog):
     # ==========================================
     # PERMISSION MANAGEMENT COMMANDS
     # ==========================================
-    
+
     @commands.command(name="allow")
     async def allow(self, ctx, member: discord.Member, permission: str):
         """
         Grant a permission to a user.
-        
+
         Usage: !allow @user <permission>
         Permissions: player_manage, config_manage, system, all
-        
+
         Note: Only the Permanent God can use this command.
         """
         # Permission check - only Permanent God
@@ -81,13 +82,13 @@ class Admin(commands.Cog):
             embed = permanent_god_only_embed()
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         # Delete the command message for cleanliness
         await ctx.message.delete()
-        
+
         # Log the command usage
         await log_admin_command(self.bot, ctx, "!allow", f"Target: {member.id}, Permission: {permission}")
-        
+
         # Validate permission name
         valid_perms = ["player_manage", "config_manage", "system", "all"]
         if permission.lower() not in valid_perms:
@@ -97,7 +98,7 @@ class Admin(commands.Cog):
             )
             await ctx.send(embed=embed, delete_after=10)
             return
-        
+
         # Grant permission(s)
         if permission.lower() == "all":
             for perm in ["player_manage", "config_manage", "system"]:
@@ -114,17 +115,17 @@ class Admin(commands.Cog):
                 f"{member.mention} granted `{permission}` permission."
             )
             await ctx.send(embed=embed, delete_after=2)
-        
+
         print(f"[DEBUG] !allow {member.id} {permission} by {ctx.author.id}")
 
     @commands.command(name="deny")
     async def deny(self, ctx, member: discord.Member, permission: str):
         """
         Remove a permission from a user.
-        
+
         Usage: !deny @user <permission>
         Permissions: player_manage, config_manage, system, all
-        
+
         Note: Only the Permanent God can use this command.
         """
         # Permission check - only Permanent God
@@ -132,10 +133,10 @@ class Admin(commands.Cog):
             embed = permanent_god_only_embed()
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await ctx.message.delete()
         await log_admin_command(self.bot, ctx, "!deny", f"Target: {member.id}, Permission: {permission}")
-        
+
         # Validate permission name
         valid_perms = ["player_manage", "config_manage", "system", "all"]
         if permission.lower() not in valid_perms:
@@ -145,7 +146,7 @@ class Admin(commands.Cog):
             )
             await ctx.send(embed=embed, delete_after=10)
             return
-        
+
         # Remove permission(s)
         if permission.lower() == "all":
             for perm in ["player_manage", "config_manage", "system"]:
@@ -162,14 +163,14 @@ class Admin(commands.Cog):
                 f"Removed `{permission}` permission from {member.mention}."
             )
             await ctx.send(embed=embed, delete_after=2)
-        
+
         print(f"[DEBUG] !deny {member.id} {permission} by {ctx.author.id}")
 
     @commands.command(name="perms")
     async def perms(self, ctx, member: discord.Member = None):
         """
         View a user's admin permissions.
-        
+
         Usage: !perms [@user]
         If no user is specified, shows your own permissions.
         """
@@ -179,24 +180,24 @@ class Admin(commands.Cog):
                 embed = permission_denied_embed("system")
                 await ctx.send(embed=embed, delete_after=2)
                 return
-        
+
         await ctx.message.delete()
-        
+
         target = member or ctx.author
         perms = await get_user_permissions(self.bot, target.id)
-        
+
         embed = permissions_view_embed(target.name, target.id, perms)
         await ctx.send(embed=embed, delete_after=15)
 
     # ==========================================
     # SLASH COMMAND SYNC
     # ==========================================
-    
+
     @commands.command(name="sync")
     async def sync(self, ctx):
         """
         Sync slash commands with Discord.
-        
+
         Usage: !sync
         This registers all / commands with Discord (can take a few seconds).
         """
@@ -205,14 +206,14 @@ class Admin(commands.Cog):
             embed = permission_denied_embed("system")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await log_admin_command(self.bot, ctx, "!sync")
         print(f"[DEBUG] !sync used by {ctx.author.id}")
-        
+
         # Send start message
         embed = sync_start_embed()
         await ctx.send(embed=embed)
-        
+
         try:
             synced = await self.bot.tree.sync()
             embed = sync_success_embed(len(synced))
@@ -224,31 +225,31 @@ class Admin(commands.Cog):
     # ==========================================
     # DIVINE HELP MENU
     # ==========================================
-    
+
     @commands.command(name="divine")
     async def divine(self, ctx):
         """
         Show the admin help menu (sent via DM).
-        
+
         Usage: !divine
         Shows different commands based on your permissions.
         """
         await ctx.message.delete()
         print(f"[DEBUG] !divine used by {ctx.author.id}")
-        
+
         # Check user's permissions
         has_player = await has_permission(self.bot, ctx.author.id, "player_manage")
         has_config = await has_permission(self.bot, ctx.author.id, "config_manage")
         has_system = await has_permission(self.bot, ctx.author.id, "system")
-        
+
         # Also check if user is Permanent God or Temporary God
         is_god = (ctx.author.id == PERMANENT_GOD) or await is_temp_god(self.bot, ctx.author.id)
-        
+
         if is_god:
             has_player = has_config = has_system = True
-        
+
         embed = divine_embed(has_player, has_config, has_system)
-        
+
         try:
             await ctx.author.send(embed=embed)
             # If DM successful, send a confirmation in channel that disappears
@@ -264,12 +265,12 @@ class Admin(commands.Cog):
     # ==========================================
     # DIVINE PULSE (Heartbeat trigger)
     # ==========================================
-    
+
     @commands.command(name="pulse")
     async def pulse(self, ctx):
         """
         Force a recovery heartbeat.
-        
+
         Usage: !pulse
         Triggers the mechanics heartbeat to restore player stats.
         """
@@ -277,11 +278,11 @@ class Admin(commands.Cog):
             embed = permission_denied_embed("system")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await ctx.message.delete()
         await log_admin_command(self.bot, ctx, "!pulse")
         print(f"[DEBUG] !pulse used by {ctx.author.id}")
-        
+
         mechanics_cog = self.bot.get_cog('Mechanics')
         if mechanics_cog:
             await mechanics_cog.heartbeat()
@@ -294,28 +295,28 @@ class Admin(commands.Cog):
     # ==========================================
     # TEMPORARY GOD MANAGEMENT
     # ==========================================
-    
+
     @commands.command(name="promote")
     async def promote(self, ctx, member: discord.Member):
         """
         Promote a user to Temporary God.
-        
+
         Usage: !promote @user
         Temporary Gods have all permissions (like Permanent God).
-        
+
         Note: Only the Permanent God can use this command.
         """
         if ctx.author.id != PERMANENT_GOD:
             embed = permanent_god_only_embed()
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await ctx.message.delete()
         await log_admin_command(self.bot, ctx, "!promote", f"Target: {member.id}")
-        
+
         await add_temp_god(self.bot, member.id)
         print(f"[DEBUG] !promote {member.id} by {ctx.author.id}")
-        
+
         embed = success_embed(
             "🌟 Promoted to Temporary God",
             f"{member.mention} now has divine powers."
@@ -326,19 +327,19 @@ class Admin(commands.Cog):
     async def demote(self, ctx, member: discord.Member):
         """
         Remove Temporary God status from a user.
-        
+
         Usage: !demote @user
-        
+
         Note: Only the Permanent God can use this command.
         """
         if ctx.author.id != PERMANENT_GOD:
             embed = permanent_god_only_embed()
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await ctx.message.delete()
         await log_admin_command(self.bot, ctx, "!demote", f"Target: {member.id}")
-        
+
         if await is_temp_god(self.bot, member.id):
             await remove_temp_god(self.bot, member.id)
             print(f"[DEBUG] !demote {member.id} by {ctx.author.id}")
@@ -358,7 +359,7 @@ class Admin(commands.Cog):
     # PLAYER MANAGEMENT COMMANDS
     # Requires player_manage permission
     # ==========================================
-    
+
     @commands.command(name="reset")
     async def reset(self, ctx, member: discord.Member = None):
         """Erase a player's entire progress."""
@@ -366,12 +367,12 @@ class Admin(commands.Cog):
             embed = permission_denied_embed("player_manage")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await ctx.message.delete()
         target = member or ctx.author
         await log_admin_command(self.bot, ctx, "!reset", f"Target: {target.id}")
         print(f"[DEBUG] !reset {target.id} by {ctx.author.id}")
-        
+
         await self.bot.db.users.delete_one({"user_id": target.id})
         embed = success_embed(
             "♻️ Divine Reset",
@@ -386,12 +387,12 @@ class Admin(commands.Cog):
             embed = permission_denied_embed("player_manage")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await ctx.message.delete()
         target = member or ctx.author
         await log_admin_command(self.bot, ctx, "!setki", f"Target: {target.id}, Amount: {amount}")
         print(f"[DEBUG] !setki {amount} for {target.id} by {ctx.author.id}")
-        
+
         await self.bot.db.users.update_one(
             {"user_id": target.id},
             {"$set": {"ki": amount}},
@@ -410,12 +411,12 @@ class Admin(commands.Cog):
             embed = permission_denied_embed("player_manage")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await ctx.message.delete()
         target = member or ctx.author
         await log_admin_command(self.bot, ctx, "!settaels", f"Target: {target.id}, Amount: {amount}")
         print(f"[DEBUG] !settaels {amount} for {target.id} by {ctx.author.id}")
-        
+
         await self.bot.db.users.update_one(
             {"user_id": target.id},
             {"$set": {"taels": amount}},
@@ -434,12 +435,12 @@ class Admin(commands.Cog):
             embed = permission_denied_embed("player_manage")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await ctx.message.delete()
         target = member or ctx.author
         await log_admin_command(self.bot, ctx, "!setmastery", f"Target: {target.id}, Amount: {amount}")
         print(f"[DEBUG] !setmastery {amount} for {target.id} by {ctx.author.id}")
-        
+
         await self.bot.db.users.update_one(
             {"user_id": target.id},
             {"$set": {"mastery": amount}},
@@ -458,12 +459,12 @@ class Admin(commands.Cog):
             embed = permission_denied_embed("player_manage")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await ctx.message.delete()
         target = member or ctx.author
         await log_admin_command(self.bot, ctx, "!setcombat", f"Target: {target.id}, Amount: {amount}")
         print(f"[DEBUG] !setcombat {amount} for {target.id} by {ctx.author.id}")
-        
+
         await self.bot.db.users.update_one(
             {"user_id": target.id},
             {"$set": {"combat_mastery": amount}},
@@ -482,12 +483,12 @@ class Admin(commands.Cog):
             embed = permission_denied_embed("player_manage")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await ctx.message.delete()
         target = member or ctx.author
         await log_admin_command(self.bot, ctx, "!fixmeridians", f"Target: {target.id}")
         print(f"[DEBUG] !fixmeridians {target.id} by {ctx.author.id}")
-        
+
         await self.bot.db.users.update_one(
             {"user_id": target.id},
             {"$set": {"meridian_damage": None}},
@@ -506,22 +507,22 @@ class Admin(commands.Cog):
             embed = permission_denied_embed("player_manage")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await ctx.message.delete()
         target = member or ctx.author
         await log_admin_command(self.bot, ctx, "!refill", f"Target: {target.id}")
         print(f"[DEBUG] !refill {target.id} by {ctx.author.id}")
-        
+
         user = await self.bot.db.users.find_one({"user_id": target.id})
         if not user:
             embed = error_embed("❌ Not Registered", f"{target.name} is not registered.")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         rank = user.get("rank", "The Bound (Mortal)")
         caps = {"The Bound (Mortal)": 100, "Third-Rate Warrior": 300, "Second-Rate Warrior": 600}
         max_v = caps.get(rank, 1000)
-        
+
         await self.bot.db.users.update_one(
             {"user_id": target.id},
             {"$set": {"vitality": max_v, "hp": max_v}}
@@ -536,7 +537,7 @@ class Admin(commands.Cog):
     # BAN / UNBAN COMMANDS
     # Requires system permission
     # ==========================================
-    
+
     @commands.command(name="ban")
     async def ban(self, ctx, member: discord.Member, *, reason: str = "No reason provided"):
         """Ban a user from using the bot."""
@@ -544,17 +545,17 @@ class Admin(commands.Cog):
             embed = permission_denied_embed("system")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await ctx.message.delete()
         await log_admin_command(self.bot, ctx, "!ban", f"Target: {member.id}, Reason: {reason}")
-        
+
         # Check if already banned
         existing = await self.bot.db.banned_users.find_one({"user_id": member.id})
         if existing:
             embed = error_embed("❌ Already Banned", f"{member.mention} is already banned.")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         now = datetime.datetime.now().isoformat()
         await self.bot.db.banned_users.insert_one({
             "user_id": member.id,
@@ -562,7 +563,7 @@ class Admin(commands.Cog):
             "banned_at": now,
             "banned_by": ctx.author.id
         })
-        
+
         print(f"[DEBUG] !ban {member.id} by {ctx.author.id}, reason: {reason}")
         embed = success_embed(
             "🔨 User Banned",
@@ -577,16 +578,16 @@ class Admin(commands.Cog):
             embed = permission_denied_embed("system")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await ctx.message.delete()
         await log_admin_command(self.bot, ctx, "!unban", f"Target: {member.id}")
-        
+
         result = await self.bot.db.banned_users.delete_one({"user_id": member.id})
         if result.deleted_count == 0:
             embed = error_embed("❌ Not Banned", f"{member.mention} is not banned.")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         print(f"[DEBUG] !unban {member.id} by {ctx.author.id}")
         embed = success_embed("✅ User Unbanned", f"{member.mention} can now use the bot again.")
         await ctx.send(embed=embed, delete_after=2)
@@ -595,7 +596,7 @@ class Admin(commands.Cog):
     # CONFIGURATION COMMANDS
     # Requires config_manage permission
     # ==========================================
-    
+
     @commands.command(name="toggle")
     async def toggle(self, ctx, feature: str):
         """Enable or disable a bot feature."""
@@ -603,10 +604,10 @@ class Admin(commands.Cog):
             embed = permission_denied_embed("config_manage")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await ctx.message.delete()
         await log_admin_command(self.bot, ctx, "!toggle", f"Feature: {feature}")
-        
+
         valid_features = ["pvp", "professions", "bazaar", "afk_gains", "combat", "cultivation", "items", "pavilion"]
         if feature.lower() not in valid_features:
             embed = error_embed(
@@ -615,15 +616,15 @@ class Admin(commands.Cog):
             )
             await ctx.send(embed=embed, delete_after=10)
             return
-        
+
         key = f"toggle_{feature.lower()}"
         current = await get_setting(self.bot, key, True)
         new_value = not current
         await set_setting(self.bot, key, new_value)
-        
+
         status = "enabled" if new_value else "disabled"
         print(f"[DEBUG] !toggle {feature} -> {status} by {ctx.author.id}")
-        
+
         embed = success_embed(
             "⚙️ Feature Toggled",
             f"{feature.capitalize()} is now **{status}**."
@@ -637,10 +638,10 @@ class Admin(commands.Cog):
             embed = permission_denied_embed("config_manage")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await ctx.message.delete()
         await log_admin_command(self.bot, ctx, "!set_cooldown", f"Command: {command}, Seconds: {seconds}")
-        
+
         valid_commands = ["work", "observe", "hunt", "recover", "focus", "rest", "breakthrough", "spar"]
         if command.lower() not in valid_commands:
             embed = error_embed(
@@ -649,10 +650,10 @@ class Admin(commands.Cog):
             )
             await ctx.send(embed=embed, delete_after=10)
             return
-        
+
         key = f"cooldown_{command.lower()}"
         await set_setting(self.bot, key, seconds)
-        
+
         print(f"[DEBUG] !set_cooldown {command} -> {seconds}s by {ctx.author.id}")
         embed = success_embed(
             "⏳ Cooldown Updated",
@@ -667,10 +668,10 @@ class Admin(commands.Cog):
             embed = permission_denied_embed("config_manage")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await ctx.message.delete()
         await log_admin_command(self.bot, ctx, "!set_emoji", f"Name: {name}, Emoji: {emoji}")
-        
+
         valid_names = ["ki", "tael", "hp", "vitality", "mastery", "combat", "meditate", "work", "observe", "breakthrough", "success", "failure", "cooldown"]
         if name.lower() not in valid_names:
             embed = error_embed(
@@ -679,10 +680,10 @@ class Admin(commands.Cog):
             )
             await ctx.send(embed=embed, delete_after=10)
             return
-        
+
         key = f"emoji_{name.lower()}"
         await set_setting(self.bot, key, emoji)
-        
+
         print(f"[DEBUG] !set_emoji {name} -> {emoji} by {ctx.author.id}")
         embed = success_embed(
             "✅ Emoji Updated",
@@ -697,10 +698,10 @@ class Admin(commands.Cog):
             embed = permission_denied_embed("config_manage")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await ctx.message.delete()
         await log_admin_command(self.bot, ctx, "!set_message", f"Key: {key}")
-        
+
         valid_keys = ["not_registered", "meridian_damage", "cooldown", "no_ki", "no_vitality", 
                      "already_meditating", "not_meditating", "cancelled", "recover_complete", 
                      "focus_complete", "rest_complete"]
@@ -711,10 +712,10 @@ class Admin(commands.Cog):
             )
             await ctx.send(embed=embed, delete_after=10)
             return
-        
+
         db_key = f"msg_{key.lower()}"
         await set_setting(self.bot, db_key, text)
-        
+
         print(f"[DEBUG] !set_message {key} -> {text[:50]}... by {ctx.author.id}")
         embed = success_embed(
             "✅ Message Updated",
@@ -729,18 +730,18 @@ class Admin(commands.Cog):
             embed = permission_denied_embed("config_manage")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await ctx.message.delete()
         await log_admin_command(self.bot, ctx, "!debug", f"State: {state}")
-        
+
         if state.lower() not in ["on", "off"]:
             embed = error_embed("❌ Invalid State", "Use `!debug on` or `!debug off`.")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         new_value = state.lower() == "on"
         await set_setting(self.bot, "debug_mode", new_value)
-        
+
         print(f"[DEBUG] !debug {state} by {ctx.author.id}")
         embed = success_embed(
             "🔍 Debug Mode",
@@ -755,14 +756,14 @@ class Admin(commands.Cog):
             embed = permission_denied_embed("config_manage")
             await ctx.send(embed=embed, delete_after=2)
             return
-        
+
         await ctx.message.delete()
-        
+
         toggles = {}
         cooldowns = {}
         emojis = {}
         messages = {}
-        
+
         # Fetch all settings from bot_settings collection
         cursor = self.bot.db.bot_settings.find({})
         async for doc in cursor:
@@ -776,10 +777,70 @@ class Admin(commands.Cog):
                 emojis[key[6:]] = value
             elif key.startswith("msg_"):
                 messages[key[4:]] = value
-        
+
         embed = settings_embed(toggles, cooldowns, emojis, messages)
         await ctx.send(embed=embed, delete_after=30)
 
+    # ==========================================
+    # NEW ADMIN INVENTORY COMMANDS (Without Embeds)
+    # ==========================================
+
+    @commands.command(name="inspect")
+    async def admin_inspect(self, ctx, member: discord.Member):
+        """
+        View a player's inventory.
+        
+        Usage: !inspect @user
+        Requires: player_manage permission
+        """
+        if not await has_permission(self.bot, ctx.author.id, "player_manage"):
+            embed = permission_denied_embed("player_manage")
+            await ctx.send(embed=embed, delete_after=2)
+            return
+        
+        await ctx.message.delete()
+        await log_admin_command(self.bot, ctx, "!inspect", f"Target: {member.id}")
+        
+        # Get inventory
+        inventory = await self.bot.db.get_inventory(member.id)
+        inventory_text = await format_inventory_for_admin(inventory)
+        
+        # Use embed from admin_embeds.py
+        embed = inventory_inspect_embed(member, inventory_text)
+        await ctx.send(embed=embed, delete_after=30)
+
+    @commands.command(name="removeitem")
+    async def admin_remove_item(self, ctx, member: discord.Member, item_name: str, quantity: int = 1):
+        """
+        Remove an item from a player's inventory.
+        
+        Usage: !removeitem @user "Item Name" [quantity]
+        Requires: player_manage permission
+        """
+        if not await has_permission(self.bot, ctx.author.id, "player_manage"):
+            embed = permission_denied_embed("player_manage")
+            await ctx.send(embed=embed, delete_after=2)
+            return
+        
+        await ctx.message.delete()
+        await log_admin_command(self.bot, ctx, "!removeitem", f"Target: {member.id}, Item: {item_name}, Qty: {quantity}")
+        
+        # Check if player has the item
+        has_it = await self.bot.db.has_item(member.id, item_name, quantity)
+        if not has_it:
+            embed = error_embed(
+                "❌ Item Not Found",
+                f"{member.display_name} does not have {quantity}x {item_name}"
+            )
+            await ctx.send(embed=embed, delete_after=5)
+            return
+        
+        # Remove the item
+        await self.bot.db.remove_item(member.id, item_name, quantity)
+        
+        # Use embed from admin_embeds.py
+        embed = item_removed_embed(member, item_name, quantity)
+        await ctx.send(embed=embed, delete_after=5)
 
 async def setup(bot):
     """Setup function for loading the cog."""
