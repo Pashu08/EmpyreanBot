@@ -11,6 +11,7 @@ import random
 import datetime
 from backend.helpers import get_max_stats, roll_random_event, calculate_stage_from_ki
 from backend.db import get_bot_setting, get_user_stat, update_user_stat, is_user_banned
+from backend.cultivation_helpers import get_minor_realm_from_ki, get_next_minor_realm, get_ki_required_for_minor_realm
 from embeds.actions_embeds import (
     WORK_FLAVORS,
     OBSERVE_FLAVORS,
@@ -25,10 +26,9 @@ import config
 
 print("[DEBUG] commands/actions.py: Loading Actions commands...")
 
-
 class ChoiceEventView(discord.ui.View):
     """View for choice-based random events."""
-    
+
     def __init__(self, ctx, event_data):
         super().__init__(timeout=90)
         self.ctx = ctx
@@ -56,7 +56,6 @@ class ChoiceEventView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=None)
             self.stop()
         return callback
-
 
 class Actions(commands.Cog):
     def __init__(self, bot):
@@ -98,6 +97,38 @@ class Actions(commands.Cog):
             await update_user_stat(self.bot.db, user_id, "stage", new_stage)
             return new_stage
         return None
+
+    # ==========================================
+    # HELPER: Check if Ki gain is blocked by minor realm cap
+    # ==========================================
+    async def _is_ki_gain_blocked(self, user_id, rank, current_ki, max_ki, minor_realm):
+        """
+        Check if player has reached the Ki requirement for next minor realm.
+        If yes, block Ki gain until they breakthrough.
+        
+        Returns:
+            tuple: (blocked, next_realm_name, required_ki)
+        """
+        # Get current minor realm from database
+        current_minor = minor_realm
+        
+        # If already at Peak, no block (major breakthrough is next)
+        if current_minor == "Peak":
+            return False, None, 0
+        
+        # Get next minor realm
+        next_minor = get_next_minor_realm(current_minor)
+        if not next_minor:
+            return False, None, 0
+        
+        # Get Ki required for next minor realm
+        required_ki = get_ki_required_for_minor_realm(next_minor, max_ki)
+        
+        # If current Ki is already enough for next realm, block further Ki gain
+        if current_ki >= required_ki:
+            return True, next_minor, required_ki
+        
+        return False, None, 0
 
     # ==========================================
     # HELPER: Process mastery milestone rewards
@@ -228,9 +259,11 @@ class Actions(commands.Cog):
         bg = user.get("background", "")
         mastery = user.get("mastery", 0.0)
         tech = user.get("active_tech", "None")
+        minor_realm = user.get("minor_realm", "Initial")
 
         max_stats = get_max_stats(rank)
         max_vit = max_stats["max_vit"]
+        max_ki = max_stats["ki_cap"]
 
         vit_cost = await get_bot_setting(self.bot.db, "actions_vit_cost_work", 10)
 
@@ -276,7 +309,7 @@ class Actions(commands.Cog):
             event_text, event_effects = roll_random_event()
             update_data = {}
             if "ki" in event_effects:
-                new_ki = min(max_stats["ki_cap"], ki_before + event_effects["ki"])
+                new_ki = min(max_ki, ki_before + event_effects["ki"])
                 update_data["ki"] = new_ki
                 event_changes.append(f"✨ {event_effects['ki']:+} Ki")
             if "taels" in event_effects:
@@ -352,15 +385,27 @@ class Actions(commands.Cog):
         rank = user.get("rank", "The Bound (Mortal)")
         mastery = user.get("mastery", 0.0)
         tech = user.get("active_tech", "None")
+        minor_realm = user.get("minor_realm", "Initial")
 
         max_stats = get_max_stats(rank)
         max_vit = max_stats["max_vit"]
-        ki_cap = max_stats["ki_cap"]
+        max_ki = max_stats["ki_cap"]
 
         vit_cost = await get_bot_setting(self.bot.db, "actions_vit_cost_observe", 10)
 
         if vit < vit_cost:
             return await ctx.send(config.MSG_NO_VITALITY.format(required=vit_cost), ephemeral=True)
+
+        # ========== KI CAP CHECK FOR MINOR REALMS ==========
+        blocked, next_realm, required_ki = await self._is_ki_gain_blocked(user_id, rank, ki, max_ki, minor_realm)
+        if blocked:
+            return await ctx.send(
+                f"❌ Your Ki has reached the threshold for **{next_realm}** realm.\n"
+                f"Use `!breakthrough` to advance before gaining more Ki.\n"
+                f"(Current Ki: {ki} / Required: {required_ki})",
+                ephemeral=True
+            )
+        # ===================================================
 
         daily_bonus, _ = await self._check_daily_bonus(user_id, "observe")
         multiplier = 2 if daily_bonus else 1
@@ -373,7 +418,7 @@ class Actions(commands.Cog):
         ki_gain = ki_gain * multiplier
 
         new_vit = vit - vit_cost
-        new_ki = min(ki_cap, ki + ki_gain)
+        new_ki = min(max_ki, ki + ki_gain)
 
         mastery_gain = 0
         new_mastery = mastery
@@ -398,7 +443,7 @@ class Actions(commands.Cog):
         if random.random() <= 0.2:
             event_text, event_effects = roll_random_event()
             if "ki" in event_effects:
-                new_ki = min(ki_cap, new_ki + event_effects["ki"])
+                new_ki = min(max_ki, new_ki + event_effects["ki"])
                 event_changes.append(f"✨ {event_effects['ki']:+} Ki")
             if "vit" in event_effects:
                 new_vit = max(0, new_vit + event_effects["vit"])
@@ -434,7 +479,7 @@ class Actions(commands.Cog):
             new_mastery=new_mastery,
             daily_bonus=daily_bonus,
             new_ki=new_ki,
-            ki_cap=ki_cap
+            ki_cap=max_ki
         )
         await ctx.send(embed=embed)
 
@@ -542,7 +587,6 @@ class Actions(commands.Cog):
                 f"Wait {error.retry_after:.1f}s before acting again.",
                 ephemeral=True
             )
-
 
 async def setup(bot):
     await bot.add_cog(Actions(bot))
