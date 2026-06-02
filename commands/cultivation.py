@@ -282,12 +282,6 @@ class Cultivation(commands.Cog):
         max_stats = get_max_stats(rank)
         max_ki = max_stats["ki_cap"]
 
-        # Get current minor realm from Ki (for consistency)
-        correct_minor = get_minor_realm_from_ki(ki, max_ki)
-        if correct_minor != minor_realm:
-            await update_user_stat(db, user_id, "minor_realm", correct_minor)
-            minor_realm = correct_minor
-
         # Check if at Peak -> attempt major breakthrough
         if minor_realm == "Peak":
             await self._attempt_major_breakthrough(ctx, user_id, rank, bg, ki, max_ki, mastery, taels)
@@ -398,7 +392,7 @@ class Cultivation(commands.Cog):
             return await ctx.send("❌ You have already reached the peak of martial arts. There is no higher realm.", ephemeral=True)
 
         next_rank = get_next_rank(rank)
-        required_ki = max_ki  # FIXED: was int(max_ki * 1.5)
+        required_ki = max_ki
 
         # Check Ki requirement
         if ki < required_ki:
@@ -526,7 +520,7 @@ class Cultivation(commands.Cog):
                 "description": f"Target: **{next_minor}**\nKi Needed: {required_ki}/{max_ki} ({required_pct}%)"
             }
         elif rank != "Peak Master":
-            required_ki = max_ki  # FIXED: was int(max_ki * 1.5)
+            required_ki = max_ki
             next_breakthrough = {
                 "title": "Next Major Breakthrough",
                 "description": f"Target: **{get_next_rank(rank)}**\nKi Needed: {required_ki}/{max_ki} (100%)\n"
