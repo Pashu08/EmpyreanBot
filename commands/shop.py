@@ -48,6 +48,7 @@ from backend.shop_helpers import (
     get_daily_give_limit,
     can_give_today
 )
+from backend.cultivation_helpers import get_next_minor_realm, get_ki_required_for_minor_realm
 
 # Embed imports
 from embeds.shop_embeds import (
@@ -78,7 +79,6 @@ import config
 
 print("[DEBUG] commands/shop.py: Loading Shop commands...")
 
-
 # ==========================================
 # MAIN COG
 # ==========================================
@@ -86,14 +86,14 @@ print("[DEBUG] commands/shop.py: Loading Shop commands...")
 class Shop(commands.Cog):
     """
     Shop cog - Handles all shop, inventory, and item management.
-    
+
     Features:
     - 3 shops (Apothecary, Provisioner, Shady Dealer for Outcasts)
     - Buy, sell, and use items
     - Give items to other players (3 per day, 5 min cooldown)
     - Search for items across all shops
     - Bound items (cannot be sold or given)
-    
+
     Commands:
     - !pouch - Check your Taels
     - !bazaar - Open shop menu
@@ -104,25 +104,25 @@ class Shop(commands.Cog):
     - !sell - Sell items
     - !give - Give items to others
     """
-    
+
     def __init__(self, bot):
         """
         Initialize the Shop cog.
-        
+
         Args:
             bot: The bot instance
         """
         self.bot = bot
         self.give_cooldowns = GiveCooldownManager()
         print("[DEBUG] Shop cog initialized")
-    
+
     async def _is_feature_enabled(self, ctx: commands.Context) -> bool:
         """
         Check if shop feature is enabled.
-        
+
         Args:
             ctx: Command context
-            
+
         Returns:
             bool: True if enabled, False otherwise
         """
@@ -131,15 +131,15 @@ class Shop(commands.Cog):
             embed = shop_feature_disabled_embed()
             await ctx.send(embed=embed, ephemeral=True)
         return enabled
-    
+
     async def _get_user_or_error(self, ctx: commands.Context, user_id: int):
         """
         Fetch user from database or send error.
-        
+
         Args:
             ctx: Command context
             user_id: Discord user ID
-            
+
         Returns:
             dict or None: User document if found, None otherwise
         """
@@ -148,11 +148,40 @@ class Shop(commands.Cog):
             await ctx.send(config.MSG_NOT_REGISTERED, ephemeral=True)
             return None
         return user
-    
+
+    # ==========================================
+    # HELPER: Check if Ki gain is blocked by minor realm cap
+    # ==========================================
+    async def _is_ki_gain_blocked(self, user_id, rank, current_ki, max_ki, minor_realm):
+        """
+        Check if player has reached the Ki requirement for next minor realm.
+        If yes, block Ki gain until they breakthrough.
+        
+        Returns:
+            tuple: (blocked, next_realm_name, required_ki)
+        """
+        # If already at Peak, no block (major breakthrough is next)
+        if minor_realm == "Peak":
+            return False, None, 0
+        
+        # Get next minor realm
+        next_minor = get_next_minor_realm(minor_realm)
+        if not next_minor:
+            return False, None, 0
+        
+        # Get Ki required for next minor realm
+        required_ki = get_ki_required_for_minor_realm(next_minor, max_ki)
+        
+        # If current Ki is already enough for next realm, block further Ki gain
+        if current_ki >= required_ki:
+            return True, next_minor, required_ki
+        
+        return False, None, 0
+
     # ==========================================
     # COMMAND: POUCH
     # ==========================================
-    
+
     @commands.hybrid_command(
         name="pouch",
         aliases=["money", "wealth"],
@@ -161,25 +190,25 @@ class Shop(commands.Cog):
     async def pouch(self, ctx: commands.Context):
         """
         Check how many Taels you have.
-        
+
         Usage: !pouch, !money, or !wealth
         """
         print(f"[DEBUG] shop.pouch: Called by {ctx.author.id}")
-        
+
         if not await self._is_feature_enabled(ctx):
             return
         if await is_user_banned(self.bot.db, ctx.author.id):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
-        
+
         taels = await get_user_stat(self.bot.db, ctx.author.id, "taels") or 0
-        
+
         embed = pouch_embed(taels)
         await ctx.send(embed=embed, ephemeral=True)
-    
+
     # ==========================================
     # COMMAND: BAZAAR
     # ==========================================
-    
+
     @commands.hybrid_command(
         name="bazaar",
         aliases=["bz"],
@@ -188,31 +217,31 @@ class Shop(commands.Cog):
     async def bazaar(self, ctx: commands.Context):
         """
         Open the interactive bazaar menu.
-        
+
         Shows buttons for Apothecary, Provisioner, and Shady Dealer (Outcasts only).
-        
+
         Usage: !bazaar or !bz
         """
         print(f"[DEBUG] shop.bazaar: Called by {ctx.author.id}")
-        
+
         if not await self._is_feature_enabled(ctx):
             return
         if await is_user_banned(self.bot.db, ctx.author.id):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
-        
+
         user_bg = await get_user_stat(self.bot.db, ctx.author.id, "background") or "None"
         taels = await get_user_stat(self.bot.db, ctx.author.id, "taels") or 0
-        
+
         embed = bazaar_main_embed(taels)
         view = ShopView(ctx, user_bg)
-        
+
         message = await ctx.send(embed=embed, view=view)
         view.message = message
-    
+
     # ==========================================
     # COMMAND: BUY
     # ==========================================
-    
+
     @commands.hybrid_command(
         name="buy",
         description="Purchase an item. Usage: !buy <item name> [quantity]"
@@ -220,21 +249,21 @@ class Shop(commands.Cog):
     async def buy(self, ctx: commands.Context, *, args: str):
         """
         Purchase items from shops.
-        
+
         Examples:
         - !buy Spirit Gathering Dan
         - !buy Spirit Gathering Dan 2
         - !buy "Spirit Gathering Dan" 2 (quotes optional)
-        
+
         Large purchases (>500 Taels) require confirmation.
         """
         print(f"[DEBUG] shop.buy: {ctx.author.id} wants to buy {args}")
-        
+
         if not await self._is_feature_enabled(ctx):
             return
         if await is_user_banned(self.bot.db, ctx.author.id):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
-        
+
         # Parse arguments
         parts = args.strip().split()
         if not parts:
@@ -242,7 +271,7 @@ class Shop(commands.Cog):
                 "❌ Please specify an item to buy. Example: `!buy Spirit Gathering Dan 2`",
                 ephemeral=True
             )
-        
+
         # Check if last part is a number (quantity)
         quantity = 1
         if parts[-1].isdigit():
@@ -250,78 +279,78 @@ class Shop(commands.Cog):
             item_name = " ".join(parts[:-1])
         else:
             item_name = " ".join(parts)
-        
+
         if not item_name:
             return await ctx.send(
                 "❌ Please specify an item to buy. Example: `!buy Spirit Gathering Dan 2`",
                 ephemeral=True
             )
-        
+
         # Find item
         item = get_item_data(item_name)
         if not item:
             embed = item_not_for_sale_embed(item_name)
             return await ctx.send(embed=embed, ephemeral=True)
-        
+
         item_key = item["key"]
         item_data = item["data"]
         price = item_data["price"]
         shop_name = item_data.get("shop", "Unknown")
         total_cost = price * quantity
-        
+
         # Check shop access
         user_bg = await get_user_stat(self.bot.db, ctx.author.id, "background") or "None"
         can_access, error_msg = validate_shop_access(shop_name, user_bg)
         if not can_access:
             embed = shady_dealer_only_embed()
             return await ctx.send(embed=embed, ephemeral=True)
-        
+
         # Check Taels
         taels = await get_user_stat(self.bot.db, ctx.author.id, "taels") or 0
         if taels < total_cost:
             embed = insufficient_taels_embed(total_cost, taels)
             return await ctx.send(embed=embed, ephemeral=True)
-        
+
         # Large purchase confirmation
         if total_cost > 500:
             effect_preview = get_item_effect_preview(item_key)
             embed = purchase_confirmation_embed(item_key, quantity, total_cost, effect_preview)
-            
+
             view = discord.ui.View(timeout=30)
             confirm_btn = discord.ui.Button(label="✅ Confirm", style=discord.ButtonStyle.success)
             cancel_btn = discord.ui.Button(label="❌ Cancel", style=discord.ButtonStyle.danger)
-            
+
             async def confirm_callback(interaction):
                 if interaction.user.id != ctx.author.id:
                     return await interaction.response.send_message("❌ Not your transaction.", ephemeral=True)
                 await interaction.response.edit_message(content="Processing...", view=None)
                 await self._process_buy(ctx, item_key, quantity, total_cost, shop_name)
                 view.stop()
-            
+
             async def cancel_callback(interaction):
                 if interaction.user.id != ctx.author.id:
                     return await interaction.response.send_message("❌ Not your transaction.", ephemeral=True)
                 await interaction.response.edit_message(content="❌ Purchase cancelled.", view=None)
                 view.stop()
-            
+
             confirm_btn.callback = confirm_callback
             cancel_btn.callback = cancel_callback
             view.add_item(confirm_btn)
             view.add_item(cancel_btn)
-            
+
             await ctx.send(embed=embed, view=view, ephemeral=True)
             return
-        
+
         await self._process_buy(ctx, item_key, quantity, total_cost, shop_name)
-    
+
     async def _process_buy(self, ctx, item_key: str, quantity: int, total_cost: int, shop_name: str):
         """Process the actual purchase after validation."""
         # Deduct Taels
         new_taels = (await get_user_stat(self.bot.db, ctx.author.id, "taels") or 0) - total_cost
         await update_user_stat(self.bot.db, ctx.author.id, "taels", new_taels)
-        
+
         is_bound = 1 if is_item_bound(item_key) else 0
-        
+
         # Add item to inventory
         db = self.bot.db
         try:
@@ -334,14 +363,14 @@ class Shop(commands.Cog):
             print(f"[ERROR] shop._process_buy: {e}")
             await ctx.send("❌ An error occurred while processing your purchase. Please try again.", ephemeral=True)
             return
-        
+
         embed = purchase_complete_embed(item_key, quantity, total_cost, shop_name, is_bound == 1)
         await ctx.send(embed=embed)
-    
+
     # ==========================================
     # COMMAND: SEARCH
     # ==========================================
-    
+
     @commands.hybrid_command(
         name="search",
         description="Find which shop sells an item."
@@ -349,27 +378,27 @@ class Shop(commands.Cog):
     async def search(self, ctx: commands.Context, *, item_name: str):
         """
         Search for an item across all shops.
-        
+
         Shows price and which shop sells it.
-        
+
         Usage: !search Spirit Gathering Dan
         """
         print(f"[DEBUG] shop.search: {ctx.author.id} searching for {item_name}")
-        
+
         if not await self._is_feature_enabled(ctx):
             return
         if await is_user_banned(self.bot.db, ctx.author.id):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
-        
+
         results = search_items(item_name)
-        
+
         embed = search_results_embed(item_name, results)
         await ctx.send(embed=embed, ephemeral=True)
-    
+
     # ==========================================
     # COMMAND: INVENTORY
     # ==========================================
-    
+
     @commands.hybrid_command(
         name="inventory",
         aliases=["inv"],
@@ -378,28 +407,28 @@ class Shop(commands.Cog):
     async def inventory(self, ctx: commands.Context):
         """
         View all items in your inventory.
-        
+
         Shows item names, quantities, and bound status.
-        
+
         Usage: !inventory or !inv
         """
         print(f"[DEBUG] shop.inventory: Called by {ctx.author.id}")
-        
+
         if not await self._is_feature_enabled(ctx):
             return
         if await is_user_banned(self.bot.db, ctx.author.id):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
-        
+
         inv = await get_inventory(self.bot.db, ctx.author.id)
         taels = await get_user_stat(self.bot.db, ctx.author.id, "taels") or 0
-        
+
         embed = inventory_embed(ctx.author.name, taels, inv)
         await ctx.send(embed=embed)
-    
+
     # ==========================================
     # COMMAND: USE
     # ==========================================
-    
+
     @commands.hybrid_command(
         name="use",
         description="Consume an item from your inventory."
@@ -407,55 +436,69 @@ class Shop(commands.Cog):
     async def use(self, ctx: commands.Context, *, item_name: str):
         """
         Use a consumable item.
-        
+
         Effects vary by item:
         - Spirit Gathering Dan: +20 Ki
         - Iron Bandage: +10 HP
         - Herbal Tea: +10 Vitality
         - etc.
-        
+
         Usage: !use "Spirit Gathering Dan"
         """
         print(f"[DEBUG] shop.use: {ctx.author.id} using {item_name}")
-        
+
         if not await self._is_feature_enabled(ctx):
             return
         if await is_user_banned(self.bot.db, ctx.author.id):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
-        
+
         # Find item in inventory
         inv = await get_inventory(self.bot.db, ctx.author.id)
         target_item = find_item_in_inventory(inv, item_name)
-        
+
         if not target_item:
             embed = item_not_found_embed(item_name)
             return await ctx.send(embed=embed, ephemeral=True)
-        
+
         # FIXED: Using 'item_name' key (bug fix)
         item_key = target_item.get('item_name', target_item.get('name'))
         item_data = SHOP_ITEMS.get(item_key)
-        
+
         if not item_data:
             return await ctx.send(f"❓ `{item_key}` has no known effect.", ephemeral=True)
-        
+
         # Apply item effects
         db = self.bot.db
         user_id = ctx.author.id
         rank = await get_user_stat(db, user_id, "rank") or "The Bound (Mortal)"
         max_stats = get_max_stats(rank)
         effect = item_data.get("effect", {})
-        
+        minor_realm = await get_user_stat(db, user_id, "minor_realm") or "Initial"
+
         ki = await get_user_stat(db, user_id, "ki") or 0
         hp = await get_user_stat(db, user_id, "hp") or 0
         vit = await get_user_stat(db, user_id, "vitality") or 0
         mastery = await get_user_stat(db, user_id, "mastery") or 0.0
-        
+
         new_ki = ki
         new_hp = hp
         new_vit = vit
         new_mastery = mastery
         effect_msg = ""
-        
+
+        # ========== KI CAP CHECK FOR MINOR REALMS (if item adds Ki) ==========
+        if "ki" in effect:
+            max_ki = max_stats["ki_cap"]
+            blocked, next_realm, required_ki = await self._is_ki_gain_blocked(user_id, rank, ki, max_ki, minor_realm)
+            if blocked:
+                return await ctx.send(
+                    f"❌ Your Ki has reached the threshold for **{next_realm}** realm.\n"
+                    f"Use `!breakthrough` to advance before gaining more Ki.\n"
+                    f"(Current Ki: {ki} / Required: {required_ki})",
+                    ephemeral=True
+                )
+        # ===================================================
+
         if "ki" in effect:
             new_ki = min(max_stats["ki_cap"], ki + effect["ki"])
             effect_msg += f"✨ +{effect['ki']} Ki. "
@@ -472,22 +515,22 @@ class Shop(commands.Cog):
         if "mastery" in effect:
             new_mastery = min(100.0, mastery + effect["mastery"])
             effect_msg += f"📖 +{effect['mastery']}% Mastery. "
-        
+
         await update_user_stat(db, user_id, "ki", new_ki)
         await update_user_stat(db, user_id, "hp", new_hp)
         await update_user_stat(db, user_id, "vitality", new_vit)
         await update_user_stat(db, user_id, "mastery", new_mastery)
-        
+
         # Remove one item
         await remove_item(db, user_id, item_key, 1)
-        
+
         embed = item_used_embed(item_key, effect_msg)
         await ctx.send(embed=embed)
-    
+
     # ==========================================
     # COMMAND: SELL
     # ==========================================
-    
+
     @commands.hybrid_command(
         name="sell",
         description="Sell an item for half its price. Usage: !sell <item> [quantity]"
@@ -495,58 +538,57 @@ class Shop(commands.Cog):
     async def sell(self, ctx: commands.Context, item_name: str, quantity: int = 1):
         """
         Sell items for half their original price.
-        
+
         Bound items cannot be sold.
-        
+
         Usage: !sell "Iron Bandage"
         !sell "Iron Bandage" 2
         """
         print(f"[DEBUG] shop.sell: {ctx.author.id} selling {quantity}x {item_name}")
-        
+
         if not await self._is_feature_enabled(ctx):
             return
         if await is_user_banned(self.bot.db, ctx.author.id):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
-        
+
         # Find item in inventory
         inv = await get_inventory(self.bot.db, ctx.author.id)
         target_item = find_item_in_inventory(inv, item_name)
-        
+
         if not target_item:
             embed = item_not_found_embed(item_name)
             return await ctx.send(embed=embed, ephemeral=True)
-        
+
         # Check bound status
         if target_item.get('bound'):
             embed = cannot_sell_bound_item_embed()
             return await ctx.send(embed=embed, ephemeral=True)
-        
+
         # FIXED: Using 'item_name' key (bug fix)
         item_key = target_item.get('item_name', target_item.get('name'))
         available_qty = target_item.get('quantity', 0)
-        
+
         if available_qty < quantity:
             embed = insufficient_quantity_embed(item_key, available_qty, quantity)
             return await ctx.send(embed=embed, ephemeral=True)
-        
+
         # Calculate sell price
         sell_price = calculate_sell_price(item_key, quantity)
         if sell_price is None:
             return await ctx.send(f"❓ Cannot determine price for {item_key}.", ephemeral=True)
-        
+
         # Add Taels and remove item
         new_taels = (await get_user_stat(self.bot.db, ctx.author.id, "taels") or 0) + sell_price
         await update_user_stat(self.bot.db, ctx.author.id, "taels", new_taels)
         await remove_item(self.bot.db, ctx.author.id, item_key, quantity)
-        
+
         embed = item_sold_embed(item_key, quantity, sell_price)
         await ctx.send(embed=embed)
-    
+
     # ==========================================
     # COMMAND: GIVE
     # ==========================================
-    
-        
+
     @commands.hybrid_command(name="give", description="Give an item to another player.")
     async def give(self, ctx, recipient: discord.Member, item_name: str, quantity: int = 1):
         if not await self._is_feature_enabled(ctx):
@@ -602,7 +644,6 @@ class Shop(commands.Cog):
         remaining_gives = get_daily_give_limit() - (new_count + 1)
         embed = item_given_embed(item_key, quantity, recipient, remaining_gives)
         await ctx.send(embed=embed)
-
 
 async def setup(bot):
     await bot.add_cog(Shop(bot))
