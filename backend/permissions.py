@@ -11,12 +11,14 @@ The permission system has three levels:
 1. Permanent God - Hardcoded user ID, bypasses all checks
 2. Temporary God - Database-stored, full access to everything
 3. Regular admins - Have specific permissions (player_manage, config_manage, system)
+
+Uses admin_permissions collection (one document per permission)
 """
 
+import datetime
 from backend.constants import PERMANENT_GOD
 
 print("[DEBUG] backend/permissions.py: Loading permission system...")
-
 
 # ==========================================
 # TEMPORARY GOD MANAGEMENT
@@ -25,16 +27,9 @@ print("[DEBUG] backend/permissions.py: Loading permission system...")
 async def is_temp_god(bot, user_id: int) -> bool:
     """
     Check if a user is a Temporary God.
-    
+
     Temporary Gods have full access to all admin commands,
     same as the Permanent God.
-    
-    Args:
-        bot: The bot instance (for database access)
-        user_id: Discord user ID to check
-        
-    Returns:
-        bool: True if user is a Temporary God, False otherwise
     """
     try:
         result = await bot.db.temp_gods.find_one({"user_id": user_id})
@@ -43,28 +38,17 @@ async def is_temp_god(bot, user_id: int) -> bool:
         print(f"[ERROR] is_temp_god failed for {user_id}: {e}")
         return False
 
-
 async def add_temp_god(bot, user_id: int) -> bool:
     """
     Grant Temporary God status to a user.
-    
-    Temporary Gods have all permissions and bypass all checks.
-    
-    Args:
-        bot: The bot instance (for database access)
-        user_id: Discord user ID to promote
-        
-    Returns:
-        bool: True if successful, False otherwise
     """
     try:
-        # Check if already a temp god
         if await is_temp_god(bot, user_id):
             return True
-        
+
         await bot.db.temp_gods.insert_one({
             "user_id": user_id,
-            "granted_at": __import__('datetime').datetime.now().isoformat()
+            "granted_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
         })
         print(f"[DEBUG] add_temp_god: {user_id} promoted to Temporary God")
         return True
@@ -72,17 +56,9 @@ async def add_temp_god(bot, user_id: int) -> bool:
         print(f"[ERROR] add_temp_god failed for {user_id}: {e}")
         return False
 
-
 async def remove_temp_god(bot, user_id: int) -> bool:
     """
     Remove Temporary God status from a user.
-    
-    Args:
-        bot: The bot instance (for database access)
-        user_id: Discord user ID to demote
-        
-    Returns:
-        bool: True if successful, False otherwise
     """
     try:
         result = await bot.db.temp_gods.delete_one({"user_id": user_id})
@@ -94,16 +70,9 @@ async def remove_temp_god(bot, user_id: int) -> bool:
         print(f"[ERROR] remove_temp_god failed for {user_id}: {e}")
         return False
 
-
 async def get_all_temp_gods(bot) -> list:
     """
     Get a list of all Temporary God user IDs.
-    
-    Args:
-        bot: The bot instance (for database access)
-        
-    Returns:
-        list: List of user IDs that have Temporary God status
     """
     try:
         cursor = bot.db.temp_gods.find({})
@@ -112,177 +81,135 @@ async def get_all_temp_gods(bot) -> list:
         print(f"[ERROR] get_all_temp_gods failed: {e}")
         return []
 
-
 # ==========================================
-# PERMISSION CHECKING
+# PERMISSION CHECKING (Using admin_permissions)
 # ==========================================
 
 async def has_permission(bot, user_id: int, permission: str) -> bool:
     """
     Check if a user has a specific permission.
-    
+
     Permission check order (stops at first match):
     1. Permanent God (hardcoded) → ALWAYS True
     2. Temporary God (database) → ALWAYS True
     3. Database permission check → True if permission exists
-    
-    Args:
-        bot: The bot instance (for database access)
-        user_id: Discord user ID to check
-        permission: Permission to check (player_manage, config_manage, system)
-        
-    Returns:
-        bool: True if user has the permission, False otherwise
     """
-    # Level 1: Permanent God (hardcoded, always has access)
+    # Level 1: Permanent God
     if user_id == PERMANENT_GOD:
         return True
-    
-    # Level 2: Temporary God (database-stored, full access)
+
+    # Level 2: Temporary God
     if await is_temp_god(bot, user_id):
         return True
-    
-    # Level 3: Regular permission check from database
+
+    # Level 3: Regular permission check from admin_permissions
     try:
-        perms = await get_user_permissions(bot, user_id)
-        return permission in perms
+        result = await bot.db.admin_permissions.find_one({
+            "user_id": user_id,
+            "permission": permission
+        })
+        return result is not None
     except Exception as e:
         print(f"[ERROR] has_permission failed for {user_id}, {permission}: {e}")
         return False
 
-
 # ==========================================
-# PERMISSION MANAGEMENT (CRUD)
+# PERMISSION MANAGEMENT (Using admin_permissions)
 # ==========================================
 
 async def add_permission(bot, user_id: int, permission: str) -> bool:
     """
     Grant a specific permission to a user.
-    
-    Args:
-        bot: The bot instance (for database access)
-        user_id: Discord user ID to grant permission to
-        permission: Permission to grant (player_manage, config_manage, system)
-        
-    Returns:
-        bool: True if successful, False otherwise
     """
+    # Validate permission name
+    if permission not in VALID_PERMISSIONS:
+        print(f"[WARN] Invalid permission '{permission}' attempted for user {user_id}")
+        return False
+
     try:
-        # First, get current permissions
-        current = await get_user_permissions(bot, user_id)
-        
-        # If already has the permission, do nothing
-        if permission in current:
+        # Check if already has the permission
+        existing = await bot.db.admin_permissions.find_one({
+            "user_id": user_id,
+            "permission": permission
+        })
+        if existing:
             return True
-        
-        # Add the new permission
-        current.append(permission)
-        
-        # Update database (upsert = create if doesn't exist)
-        await bot.db.user_permissions.update_one(
-            {"user_id": user_id},
-            {"$set": {"permissions": current}},
-            upsert=True
-        )
+
+        # Add the permission (one document per permission)
+        await bot.db.admin_permissions.insert_one({
+            "user_id": user_id,
+            "permission": permission,
+            "granted_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        })
         print(f"[DEBUG] add_permission: {user_id} granted {permission}")
         return True
     except Exception as e:
         print(f"[ERROR] add_permission failed for {user_id}, {permission}: {e}")
         return False
 
-
 async def remove_permission(bot, user_id: int, permission: str) -> bool:
     """
     Remove a specific permission from a user.
-    
-    Args:
-        bot: The bot instance (for database access)
-        user_id: Discord user ID to remove permission from
-        permission: Permission to remove
-        
-    Returns:
-        bool: True if successful, False otherwise
     """
+    # Validate permission name
+    if permission not in VALID_PERMISSIONS:
+        print(f"[WARN] Invalid permission '{permission}' attempted for user {user_id}")
+        return False
+
     try:
-        # Get current permissions
-        current = await get_user_permissions(bot, user_id)
-        
-        # If doesn't have the permission, do nothing
-        if permission not in current:
+        result = await bot.db.admin_permissions.delete_one({
+            "user_id": user_id,
+            "permission": permission
+        })
+        if result.deleted_count > 0:
+            print(f"[DEBUG] remove_permission: {user_id} lost {permission}")
             return True
-        
-        # Remove the permission
-        current.remove(permission)
-        
-        # Update database
-        if current:
-            await bot.db.user_permissions.update_one(
-                {"user_id": user_id},
-                {"$set": {"permissions": current}}
-            )
-        else:
-            # If no permissions left, delete the document
-            await bot.db.user_permissions.delete_one({"user_id": user_id})
-        
-        print(f"[DEBUG] remove_permission: {user_id} lost {permission}")
-        return True
+        return False
     except Exception as e:
         print(f"[ERROR] remove_permission failed for {user_id}, {permission}: {e}")
         return False
 
-
 async def get_user_permissions(bot, user_id: int) -> list:
     """
     Get all permissions for a user.
-    
-    Args:
-        bot: The bot instance (for database access)
-        user_id: Discord user ID to get permissions for
-        
-    Returns:
-        list: List of permission strings (empty list if none)
     """
     try:
-        doc = await bot.db.user_permissions.find_one({"user_id": user_id})
-        if doc and "permissions" in doc:
-            return doc["permissions"]
-        return []
+        cursor = bot.db.admin_permissions.find({"user_id": user_id})
+        docs = await cursor.to_list(length=10)
+        return [doc["permission"] for doc in docs]
     except Exception as e:
         print(f"[ERROR] get_user_permissions failed for {user_id}: {e}")
         return []
 
-
 async def set_user_permissions(bot, user_id: int, permissions: list) -> bool:
     """
     Replace all permissions for a user with a new list.
-    
-    Use this carefully - it overwrites ALL existing permissions.
-    
-    Args:
-        bot: The bot instance (for database access)
-        user_id: Discord user ID to set permissions for
-        permissions: List of permission strings
-        
-    Returns:
-        bool: True if successful, False otherwise
+
+    WARNING: This deletes all existing permissions and adds new ones.
     """
     try:
-        if permissions:
-            await bot.db.user_permissions.update_one(
-                {"user_id": user_id},
-                {"$set": {"permissions": permissions}},
-                upsert=True
-            )
-        else:
-            # Empty list - delete the document
-            await bot.db.user_permissions.delete_one({"user_id": user_id})
-        
+        # Validate all permissions
+        for perm in permissions:
+            if perm not in VALID_PERMISSIONS:
+                print(f"[WARN] Invalid permission '{perm}' in set_user_permissions")
+                return False
+
+        # Delete all existing permissions for this user
+        await bot.db.admin_permissions.delete_many({"user_id": user_id})
+
+        # Add new permissions
+        for permission in permissions:
+            await bot.db.admin_permissions.insert_one({
+                "user_id": user_id,
+                "permission": permission,
+                "granted_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+            })
+
         print(f"[DEBUG] set_user_permissions: {user_id} permissions set to {permissions}")
         return True
     except Exception as e:
         print(f"[ERROR] set_user_permissions failed for {user_id}: {e}")
         return False
-
 
 # ==========================================
 # PERMISSION CONSTANTS
@@ -309,31 +236,16 @@ PERMISSION_DESCRIPTIONS = {
     "system": "Sync slash commands, promote/demote gods, ban/unban users"
 }
 
-
 def get_permission_name(permission: str) -> str:
     """
     Get the human-readable name for a permission.
-    
-    Args:
-        permission: The permission key (e.g., "player_manage")
-        
-    Returns:
-        str: Human-readable name, or the original if not found
     """
     return PERMISSION_NAMES.get(permission, permission)
-
 
 def get_permission_description(permission: str) -> str:
     """
     Get the description for a permission.
-    
-    Args:
-        permission: The permission key (e.g., "player_manage")
-        
-    Returns:
-        str: Description of what the permission allows
     """
     return PERMISSION_DESCRIPTIONS.get(permission, "No description available")
-
 
 print("[DEBUG] backend/permissions.py: Permission system loaded successfully")
