@@ -41,6 +41,7 @@ class MongoDBWrapper:
         self.admin_logs = None
         self.admins = None
         self.blocked_channels = None  # NEW: For storing blocked channels
+        self.temp_gods = None  # NEW: For Temporary God status
 
     async def connect(self):
         """
@@ -64,6 +65,7 @@ class MongoDBWrapper:
         self.admin_logs = self.db.admin_logs
         self.admins = self.db.admins
         self.blocked_channels = self.db.blocked_channels  # NEW: Blocked channels collection
+        self.temp_gods = self.db.temp_gods  # NEW: Temp gods collection
 
         # Create indexes for better query performance
         # Each index speeds up specific types of queries
@@ -76,6 +78,7 @@ class MongoDBWrapper:
         await self.admin_logs.create_index([("timestamp", -1)])
         await self.admins.create_index([("user_id", 1)], unique=True)
         await self.blocked_channels.create_index([("channel_id", 1)], unique=True)  # NEW: Index for blocked_channels
+        await self.temp_gods.create_index([("user_id", 1)], unique=True)  # NEW: Index for temp_gods
 
         print("[DEBUG] MongoDB connected and indexes created")
         return self
@@ -227,6 +230,24 @@ class MongoDBWrapper:
         """
         item = await self.inventory.find_one({"user_id": user_id, "item_name": item_name})
         return item is not None and item.get("quantity", 0) >= quantity
+
+    async def update_item_name(self, user_id, old_name, new_name):
+        """
+        Update an item's name (used for item mutation on breakthrough).
+
+        Args:
+            user_id (int): Discord user ID
+            old_name (str): Current item name
+            new_name (str): New item name
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        result = await self.inventory.update_one(
+            {"user_id": user_id, "item_name": old_name},
+            {"$set": {"item_name": new_name}}
+        )
+        return result.modified_count > 0
 
     # ==========================================
     # BOT SETTINGS METHODS
@@ -487,6 +508,15 @@ class MongoDBWrapper:
             ("toggle_help", "True"),
             ("toggle_shop", "True"),
             ("toggle_professions", "True"),
+            # Command toggles
+            ("cmd_work", "True"),
+            ("cmd_observe", "True"),
+            ("cmd_comprehend", "True"),
+            # System settings
+            ("maintenance_mode", "False"),
+            ("debug_mode", "False"),
+            # Cooldowns
+            ("cooldown_comprehend", "1800"),
         ]
         for key, value in default_settings:
             await self.bot_settings.update_one(
