@@ -1,7 +1,6 @@
 """
 commands/actions.py - Command logic for Actions cog
 Contains all command implementations (work, observe, comprehend).
-Embed designs are imported from embeds.actions_embeds.
 """
 
 import discord
@@ -10,8 +9,28 @@ from discord import app_commands
 import random
 import datetime
 from backend.helpers import get_max_stats, roll_random_event, calculate_stage_from_ki
-from backend.db import get_bot_setting, get_user_stat, update_user_stat, is_user_banned
+from backend.db import get_bot_setting, get_user_stat, update_user_stat, is_user_banned, set_user_cooldown, get_user_cooldown
 from backend.cultivation_helpers import get_minor_realm_from_ki, get_next_minor_realm, get_ki_required_for_minor_realm
+from backend.actions_data import (
+    WORK_VIT_COST,
+    WORK_BASE_GAIN_MIN,
+    WORK_BASE_GAIN_MAX,
+    WORK_RANK_BONUS,
+    OBSERVE_VIT_COST,
+    OBSERVE_BASE_KI_MIN,
+    OBSERVE_BASE_KI_MAX,
+    OBSERVE_RANK_BONUS,
+    COMPREHEND_VIT_COST,
+    COMPREHEND_COOLDOWN_SECONDS,
+    COMPREHEND_GAIN_MIN,
+    COMPREHEND_GAIN_MAX,
+    LABORER_MASTERY_CHANCE,
+    LABORER_MASTERY_GAIN,
+    MARTIAL_INSIGHT_MIN,
+    MARTIAL_INSIGHT_MAX,
+    CHOICE_EVENT_CHANCE,
+    RANDOM_EVENT_CHANCE
+)
 from embeds.actions_embeds import (
     WORK_FLAVORS,
     OBSERVE_FLAVORS,
@@ -26,13 +45,29 @@ import config
 
 print("[DEBUG] commands/actions.py: Loading Actions commands...")
 
-class ChoiceEventView(discord.ui.View):
-    """View for choice-based random events."""
+# ==========================================
+# HELPER: Check if user is admin (for debug bypass)
+# ==========================================
+async def is_admin(bot, user_id: int) -> bool:
+    """Check if user has admin permissions."""
+    from backend.constants import PERMANENT_GOD
+    from backend.permissions import has_permission
+    
+    if user_id == PERMANENT_GOD:
+        return True
+    if await has_permission(bot, user_id, "system"):
+        return True
+    return False
 
-    def __init__(self, ctx, event_data):
+class ChoiceEventView(discord.ui.View):
+    """View for choice-based random events with actual stat changes."""
+
+    def __init__(self, ctx, event_data, user_id, user_data):
         super().__init__(timeout=90)
         self.ctx = ctx
         self.event_data = event_data
+        self.user_id = user_id
+        self.user_data = user_data
         self.choices = event_data["choices"]
 
         for key, choice in self.choices.items():
@@ -51,8 +86,51 @@ class ChoiceEventView(discord.ui.View):
                     "❌ This event is not for you.", 
                     ephemeral=True
                 )
-            result = self.choices[key]["result"]
-            embed = event_outcome_embed(result)
+            
+            choice = self.choices[key]
+            result_text = choice["result"]
+            
+            # Apply actual stat changes based on choice
+            db = self.ctx.bot.db
+            user_id = self.user_id
+            
+            if "+20 Ki" in result_text:
+                current_ki = self.user_data.get("ki", 0)
+                max_ki = get_max_stats(self.user_data.get("rank", "The Bound (Mortal)"))["ki_cap"]
+                new_ki = min(max_ki, current_ki + 20)
+                await update_user_stat(db, user_id, "ki", new_ki)
+            elif "+5 Combat Mastery" in result_text:
+                current_cm = self.user_data.get("combat_mastery", 0)
+                await update_user_stat(db, user_id, "combat_mastery", current_cm + 5)
+            elif "-10 Vitality" in result_text:
+                current_vit = self.user_data.get("vitality", 0)
+                new_vit = max(0, current_vit - 10)
+                await update_user_stat(db, user_id, "vitality", new_vit)
+            elif "+15 Mastery" in result_text:
+                current_mastery = self.user_data.get("mastery", 0.0)
+                new_mastery = min(100.0, current_mastery + 15)
+                await update_user_stat(db, user_id, "mastery", new_mastery)
+            elif "+10 Ki" in result_text:
+                current_ki = self.user_data.get("ki", 0)
+                max_ki = get_max_stats(self.user_data.get("rank", "The Bound (Mortal)"))["ki_cap"]
+                new_ki = min(max_ki, current_ki + 10)
+                await update_user_stat(db, user_id, "ki", new_ki)
+            elif "+5 Vitality" in result_text:
+                current_vit = self.user_data.get("vitality", 0)
+                max_vit = get_max_stats(self.user_data.get("rank", "The Bound (Mortal)"))["max_vit"]
+                new_vit = min(max_vit, current_vit + 5)
+                await update_user_stat(db, user_id, "vitality", new_vit)
+            elif "+20 Taels" in result_text:
+                current_taels = self.user_data.get("taels", 0)
+                await update_user_stat(db, user_id, "taels", current_taels + 20)
+            elif "+30 Taels" in result_text:
+                current_taels = self.user_data.get("taels", 0)
+                await update_user_stat(db, user_id, "taels", current_taels + 30)
+            elif "+10 Combat Mastery" in result_text:
+                current_cm = self.user_data.get("combat_mastery", 0)
+                await update_user_stat(db, user_id, "combat_mastery", current_cm + 10)
+            
+            embed = event_outcome_embed(result_text)
             await interaction.response.edit_message(embed=embed, view=None)
             self.stop()
         return callback
@@ -73,6 +151,38 @@ class Actions(commands.Cog):
                 ephemeral=True
             )
         return enabled
+
+    # ==========================================
+    # HELPER: Check if command is toggled off
+    # ==========================================
+    async def _is_command_enabled(self, ctx, command_name: str) -> bool:
+        """Check if specific command is enabled via !toggle_cmd."""
+        enabled = await get_bot_setting(self.bot.db, f"cmd_{command_name}", True)
+        if not enabled:
+            await ctx.send(f"❌ Command `{command_name}` is currently disabled by an administrator.", ephemeral=True)
+        return enabled
+
+    # ==========================================
+    # HELPER: Check maintenance mode
+    # ==========================================
+    async def _check_maintenance(self, ctx) -> bool:
+        """Check if bot is in maintenance mode."""
+        maintenance = await get_bot_setting(self.bot.db, "maintenance_mode", False)
+        if maintenance:
+            is_admin_user = await is_admin(self.bot, ctx.author.id)
+            if not is_admin_user:
+                await ctx.send("🔧 Bot is under maintenance. Please try again later.", ephemeral=True)
+                return True
+        return False
+
+    # ==========================================
+    # HELPER: Debug log
+    # ==========================================
+    async def _debug_log(self, ctx, message: str):
+        """Log debug info if debug mode is enabled."""
+        debug_mode = await get_bot_setting(self.bot.db, "debug_mode", False)
+        if debug_mode:
+            print(f"[DEBUG] {ctx.command.name if ctx.command else 'Unknown'}: {message}")
 
     # ==========================================
     # HELPER: Daily bonus check
@@ -102,32 +212,15 @@ class Actions(commands.Cog):
     # HELPER: Check if Ki gain is blocked by minor realm cap
     # ==========================================
     async def _is_ki_gain_blocked(self, user_id, rank, current_ki, max_ki, minor_realm):
-        """
-        Check if player has reached the Ki requirement for next minor realm.
-        If yes, block Ki gain until they breakthrough.
-        
-        Returns:
-            tuple: (blocked, next_realm_name, required_ki)
-        """
-        # Get current minor realm from database
         current_minor = minor_realm
-        
-        # If already at Peak, no block (major breakthrough is next)
         if current_minor == "Peak":
             return False, None, 0
-        
-        # Get next minor realm
         next_minor = get_next_minor_realm(current_minor)
         if not next_minor:
             return False, None, 0
-        
-        # Get Ki required for next minor realm
         required_ki = get_ki_required_for_minor_realm(next_minor, max_ki)
-        
-        # If current Ki is already enough for next realm, block further Ki gain
         if current_ki >= required_ki:
             return True, next_minor, required_ki
-        
         return False, None, 0
 
     # ==========================================
@@ -201,8 +294,8 @@ class Actions(commands.Cog):
     # ==========================================
     # HELPER: Random choice event
     # ==========================================
-    async def _maybe_choice_event(self, ctx):
-        if random.random() > 0.05:
+    async def _maybe_choice_event(self, ctx, user_id, user_data):
+        if random.random() > CHOICE_EVENT_CHANCE:
             return None
 
         events = [
@@ -234,17 +327,23 @@ class Actions(commands.Cog):
         return random.choice(events)
 
     # ==========================================
-    # HYBRID COMMAND: WORK
+    # COMMAND: WORK
     # ==========================================
     @commands.hybrid_command(name="work", description="Perform labor within the Murim world for Taels.")
     @app_commands.checks.cooldown(1, 5.0)
     async def work(self, ctx):
         print(f"[DEBUG] actions.work: Called by {ctx.author.id}")
 
+        if not await self._is_command_enabled(ctx, "work"):
+            return
+        if await self._check_maintenance(ctx):
+            return
         if not await self._actions_enabled(ctx):
             return
         if await is_user_banned(self.bot.db, ctx.author.id):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
+
+        await self._debug_log(ctx, "Starting work command")
 
         user_id = ctx.author.id
         db = self.bot.db
@@ -265,47 +364,45 @@ class Actions(commands.Cog):
         max_vit = max_stats["max_vit"]
         max_ki = max_stats["ki_cap"]
 
-        vit_cost = await get_bot_setting(self.bot.db, "actions_vit_cost_work", 10)
-
-        if vit < vit_cost:
-            return await ctx.send(config.MSG_NO_VITALITY.format(required=vit_cost), ephemeral=True)
+        if vit < WORK_VIT_COST:
+            return await ctx.send(config.MSG_NO_VITALITY.format(required=WORK_VIT_COST), ephemeral=True)
 
         daily_bonus, _ = await self._check_daily_bonus(user_id, "work")
         multiplier = 2 if daily_bonus else 1
 
-        base_gain = random.randint(5, 15)
-        if "Third-Rate" in rank:
-            base_gain += 5
-        elif "Second-Rate" in rank:
-            base_gain += 10
+        base_gain = random.randint(WORK_BASE_GAIN_MIN, WORK_BASE_GAIN_MAX)
+        for rank_name, bonus in WORK_RANK_BONUS.items():
+            if rank_name in rank:
+                base_gain += bonus
+                break
 
         final_taels_gain = base_gain * multiplier
-        new_vit = vit - vit_cost
+        new_vit = vit - WORK_VIT_COST
         new_taels = taels + final_taels_gain
 
         mastery_gain = 0
         new_mastery = mastery
         mastery_msg = ""
         if bg == "Laborer" and tech != "None" and mastery < 100:
-            if random.random() <= 0.10:
-                mastery_gain = 0.5
+            if random.random() <= LABORER_MASTERY_CHANCE:
+                mastery_gain = LABORER_MASTERY_GAIN
                 new_mastery = min(100.0, mastery + mastery_gain)
                 mastery_msg = f"\n✨ **Laborer's Insight:** +{mastery_gain}% Mastery in **{tech}**"
 
         ki_before = user.get("ki", 0)
         hp_before = user.get("hp", 0)
 
-        choice_event = await self._maybe_choice_event(ctx)
+        choice_event = await self._maybe_choice_event(ctx, user_id, user)
         if choice_event:
             embed = choice_event_embed(choice_event["title"], choice_event["description"])
-            view = ChoiceEventView(ctx, choice_event)
+            view = ChoiceEventView(ctx, choice_event, user_id, user)
             await ctx.send(embed=embed, view=view)
             return
 
         event_text = None
         event_effects = {}
         event_changes = []
-        if random.random() <= 0.2:
+        if random.random() <= RANDOM_EVENT_CHANCE:
             event_text, event_effects = roll_random_event()
             update_data = {}
             if "ki" in event_effects:
@@ -361,17 +458,23 @@ class Actions(commands.Cog):
         await ctx.send(embed=embed)
 
     # ==========================================
-    # HYBRID COMMAND: OBSERVE
+    # COMMAND: OBSERVE
     # ==========================================
     @commands.hybrid_command(name="observe", description="Observe the world and refine your Ki.")
     @app_commands.checks.cooldown(1, 5.0)
     async def observe(self, ctx):
         print(f"[DEBUG] actions.observe: Called by {ctx.author.id}")
 
+        if not await self._is_command_enabled(ctx, "observe"):
+            return
+        if await self._check_maintenance(ctx):
+            return
         if not await self._actions_enabled(ctx):
             return
         if await is_user_banned(self.bot.db, ctx.author.id):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
+
+        await self._debug_log(ctx, "Starting observe command")
 
         user_id = ctx.author.id
         db = self.bot.db
@@ -391,12 +494,10 @@ class Actions(commands.Cog):
         max_vit = max_stats["max_vit"]
         max_ki = max_stats["ki_cap"]
 
-        vit_cost = await get_bot_setting(self.bot.db, "actions_vit_cost_observe", 10)
+        if vit < OBSERVE_VIT_COST:
+            return await ctx.send(config.MSG_NO_VITALITY.format(required=OBSERVE_VIT_COST), ephemeral=True)
 
-        if vit < vit_cost:
-            return await ctx.send(config.MSG_NO_VITALITY.format(required=vit_cost), ephemeral=True)
-
-        # ========== KI CAP CHECK FOR MINOR REALMS ==========
+        # Ki cap check for minor realms
         blocked, next_realm, required_ki = await self._is_ki_gain_blocked(user_id, rank, ki, max_ki, minor_realm)
         if blocked:
             return await ctx.send(
@@ -405,42 +506,41 @@ class Actions(commands.Cog):
                 f"(Current Ki: {ki} / Required: {required_ki})",
                 ephemeral=True
             )
-        # ===================================================
 
         daily_bonus, _ = await self._check_daily_bonus(user_id, "observe")
         multiplier = 2 if daily_bonus else 1
 
-        ki_gain = random.randint(3, 8)
-        if "Third-Rate" in rank:
-            ki_gain += 2
-        elif "Second-Rate" in rank:
-            ki_gain += 4
+        ki_gain = random.randint(OBSERVE_BASE_KI_MIN, OBSERVE_BASE_KI_MAX)
+        for rank_name, bonus in OBSERVE_RANK_BONUS.items():
+            if rank_name in rank:
+                ki_gain += bonus
+                break
         ki_gain = ki_gain * multiplier
 
-        new_vit = vit - vit_cost
+        new_vit = vit - OBSERVE_VIT_COST
         new_ki = min(max_ki, ki + ki_gain)
 
         mastery_gain = 0
         new_mastery = mastery
         mastery_msg = ""
         if tech != "None" and mastery < 100:
-            mastery_gain = round(random.uniform(0.5, 1.5), 2)
+            mastery_gain = round(random.uniform(MARTIAL_INSIGHT_MIN, MARTIAL_INSIGHT_MAX), 2)
             new_mastery = min(100.0, mastery + mastery_gain)
             mastery_msg = f"\n📖 **Martial Insight:** +{mastery_gain}% Mastery in **{tech}**"
 
         hp_before = user.get("hp", 0)
 
-        choice_event = await self._maybe_choice_event(ctx)
+        choice_event = await self._maybe_choice_event(ctx, user_id, user)
         if choice_event:
             embed = choice_event_embed(choice_event["title"], choice_event["description"])
-            view = ChoiceEventView(ctx, choice_event)
+            view = ChoiceEventView(ctx, choice_event, user_id, user)
             await ctx.send(embed=embed, view=view)
             return
 
         event_text = None
         event_effects = {}
         event_changes = []
-        if random.random() <= 0.2:
+        if random.random() <= RANDOM_EVENT_CHANCE:
             event_text, event_effects = roll_random_event()
             if "ki" in event_effects:
                 new_ki = min(max_ki, new_ki + event_effects["ki"])
@@ -484,16 +584,22 @@ class Actions(commands.Cog):
         await ctx.send(embed=embed)
 
     # ==========================================
-    # HYBRID COMMAND: COMPREHEND
+    # COMMAND: COMPREHEND
     # ==========================================
     @commands.hybrid_command(name="comprehend", description="Deeply study your martial technique.")
     async def comprehend(self, ctx):
         print(f"[DEBUG] actions.comprehend: Called by {ctx.author.id}")
 
+        if not await self._is_command_enabled(ctx, "comprehend"):
+            return
+        if await self._check_maintenance(ctx):
+            return
         if not await self._actions_enabled(ctx):
             return
         if await is_user_banned(self.bot.db, ctx.author.id):
             return await ctx.send(config.MSG_BANNED, ephemeral=True)
+
+        await self._debug_log(ctx, "Starting comprehend command")
 
         user_id = ctx.author.id
         db = self.bot.db
@@ -510,47 +616,48 @@ class Actions(commands.Cog):
         max_stats = get_max_stats(rank)
         max_vit = max_stats["max_vit"]
 
-        vit_cost = await get_bot_setting(self.bot.db, "actions_vit_cost_comprehend", 40)
-
         if tech == "None":
             return await ctx.send("❌ You possess no martial technique to comprehend.", ephemeral=True)
 
+        # Database-backed cooldown
         cooldown_key = f"comprehend_{user_id}"
-        if hasattr(self.bot, 'command_cooldowns'):
-            last_used = self.bot.command_cooldowns.get(cooldown_key)
-            if last_used:
-                elapsed = (datetime.datetime.now() - last_used).total_seconds()
-                if elapsed < 1800:
-                    remaining = int(1800 - elapsed)
-                    await ctx.send(embed=cooldown_embed(remaining), ephemeral=True)
-                    return
-        else:
-            self.bot.command_cooldowns = {}
+        cooldown_seconds = await get_bot_setting(self.bot.db, "cooldown_comprehend", COMPREHEND_COOLDOWN_SECONDS)
+        
+        last_used = await get_user_cooldown(self.bot.db, cooldown_key)
+        if last_used:
+            elapsed = (datetime.datetime.now() - last_used).total_seconds()
+            if elapsed < cooldown_seconds:
+                remaining = int(cooldown_seconds - elapsed)
+                await self._debug_log(ctx, f"Comprehend on cooldown: {remaining}s remaining")
+                await ctx.send(embed=cooldown_embed(remaining), ephemeral=True)
+                return
 
-        if vit < vit_cost:
-            return await ctx.send(config.MSG_NO_VITALITY.format(required=vit_cost), ephemeral=True)
+        if vit < COMPREHEND_VIT_COST:
+            return await ctx.send(config.MSG_NO_VITALITY.format(required=COMPREHEND_VIT_COST), ephemeral=True)
 
         if mastery >= 100:
             return await ctx.send("🧠 Your understanding has already reached its peak.", ephemeral=True)
 
-        gain = round(random.uniform(5.0, 10.0), 2)
-        new_vit = vit - vit_cost
+        gain = round(random.uniform(COMPREHEND_GAIN_MIN, COMPREHEND_GAIN_MAX), 2)
+        new_vit = vit - COMPREHEND_VIT_COST
         new_mastery = min(100.0, mastery + gain)
         actual_gain = round(new_mastery - mastery, 2)
 
-        self.bot.command_cooldowns[cooldown_key] = datetime.datetime.now()
+        await set_user_cooldown(db, cooldown_key)
 
-        choice_event = await self._maybe_choice_event(ctx)
+        await self._debug_log(ctx, f"Gained {actual_gain}% mastery, new mastery: {new_mastery}%")
+
+        choice_event = await self._maybe_choice_event(ctx, user_id, user)
         if choice_event:
             embed = choice_event_embed(choice_event["title"], choice_event["description"])
-            view = ChoiceEventView(ctx, choice_event)
+            view = ChoiceEventView(ctx, choice_event, user_id, user)
             await ctx.send(embed=embed, view=view)
             return
 
         event_text = None
         event_effects = {}
         event_changes = []
-        if random.random() <= 0.2:
+        if random.random() <= RANDOM_EVENT_CHANCE:
             event_text, event_effects = roll_random_event()
             if "vit" in event_effects:
                 new_vit = max(0, new_vit + event_effects["vit"])
@@ -576,7 +683,7 @@ class Actions(commands.Cog):
         await ctx.send(embed=embed)
 
     # ==========================================
-    # COOLDOWN ERROR HANDLER (for work and observe only)
+    # COOLDOWN ERROR HANDLER
     # ==========================================
     @work.error
     @observe.error
